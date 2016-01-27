@@ -235,6 +235,28 @@ class decompressor {
 };
 
 
+int roundtrip(const std::string& input_filename, std::ostream* out) {
+  std::stringstream original, compressed, decompressed;
+  original << std::ifstream(input_filename).rdbuf();
+  compressor c(input_filename, compressed);
+  c.run();
+  decompressor d(input_filename, compressed.str(), decompressed);
+  d.run();
+
+  if (original.str() == decompressed.str()) {
+    if (out != &std::cout) {
+      (*out) << compressed.str();
+    }
+    double ratio = compressed.str().size() * 1.0 / original.str().size();
+    std::cout << "Compress-decompress roundtrip succeeded, ratio = " << ratio*100. << "%." << std::endl;
+    return 0;
+  } else {
+    std::cerr << "Compress-decompress roundtrip failed." << std::endl;
+    return 1;
+  }
+}
+
+
 int
 main(int argc, char **argv) {
   av_register_all();
@@ -260,24 +282,7 @@ main(int argc, char **argv) {
       decompressor d(input_filename, *out);
       d.run();
     } else if (command == "roundtrip") {
-      std::stringstream original, compressed, decompressed;
-      original << std::ifstream(input_filename).rdbuf();
-      compressor c(input_filename, compressed);
-      c.run();
-      decompressor d(input_filename, compressed.str(), decompressed);
-      d.run();
-
-      if (original.str() == decompressed.str()) {
-        if (out != &std::cout) {
-          out_file << compressed.str();
-        }
-        double ratio = compressed.str().size() * 1.0 / original.str().size();
-        std::cout << "Compress-decompress roundtrip succeeded, ratio = " << ratio*100. << "%." << std::endl;
-        return 0;
-      } else {
-        std::cerr << "Compress-decompress roundtrip failed." << std::endl;
-        return 1;
-      }
+      return roundtrip(input_filename, out);
     } else {
       throw std::invalid_argument("Unknown command: " + command);
     }
