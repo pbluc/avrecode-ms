@@ -1,2 +1,4 @@
 *.o
 recode
+recode.pb.cc
+recode.pb.h

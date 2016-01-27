@@ -1,0 +1,11 @@
+message Recoded {
+  message Metadata {
+    optional bytes version = 1;
+    optional bytes source_commit = 2;
+    optional bytes binary_sha256 = 3;
+    optional int64 binary_timestamp = 4;
+  };
+  optional Metadata metadata = 1;
+  repeated bytes raw_blocks = 2;
+  repeated bytes cabac_blocks = 3;
+};
