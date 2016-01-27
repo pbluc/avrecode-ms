@@ -244,7 +244,7 @@ int roundtrip(const std::string& input_filename, std::ostream* out) {
   d.run();
 
   if (original.str() == decompressed.str()) {
-    if (out != &std::cout) {
+    if (out) {
       (*out) << compressed.str();
     }
     double ratio = compressed.str().size() * 1.0 / original.str().size();
@@ -267,22 +267,20 @@ main(int argc, char **argv) {
   }
   std::string command = argv[1];
   std::string input_filename = argv[2];
-  std::ostream *out = &std::cout;
   std::ofstream out_file;
   if (argc > 3) {
     out_file.open(argv[3]);
-    out = &out_file;
   }
 
   try {
     if (command == "compress") {
-      compressor c(input_filename, *out);
+      compressor c(input_filename, out_file.is_open() ? out_file : std::cout);
       c.run();
     } else if (command == "decompress") {
-      decompressor d(input_filename, *out);
+      decompressor d(input_filename, out_file.is_open() ? out_file : std::cout);
       d.run();
     } else if (command == "roundtrip") {
-      return roundtrip(input_filename, out);
+      return roundtrip(input_filename, out_file.is_open() ? &out_file : nullptr);
     } else {
       throw std::invalid_argument("Unknown command: " + command);
     }
