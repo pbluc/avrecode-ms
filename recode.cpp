@@ -1,3 +1,4 @@
+#include <fstream>
 #include <iostream>
 #include <typeinfo>
 
@@ -90,46 +91,51 @@ struct hooks {
 
 class compressor {
  public:
-  compressor(const std::string& input_filename_in) : input_filename(input_filename_in) {
-    if (av_file_map(input_filename.c_str(), &input_bytes, &input_size, 0, NULL) < 0) {
+  compressor(const std::string& input_filename_in, std::ostream& out_stream_in)
+    : input_filename(input_filename_in), out_stream(out_stream_in) {
+    if (av_file_map(input_filename.c_str(), &original_bytes, &original_size, 0, NULL) < 0) {
       throw std::invalid_argument("Failed to open file: " + input_filename);
     }
   }
 
   ~compressor() {
-    av_file_unmap(input_bytes, input_size);
+    av_file_unmap(original_bytes, original_size);
   }
 
   void run();
 
   int read_packet(uint8_t *buffer_out, int size) {
-    size = std::min<int>(size, input_size - input_offset);
+    size = std::min<int>(size, original_size - read_offset);
 
-    av_log(NULL, AV_LOG_INFO, "read_packet offset:%d size:%d\n", input_offset, size);
+    av_log(NULL, AV_LOG_INFO, "read_packet offset:%d size:%d\n", read_offset, size);
 
-    memcpy(buffer_out, &input_bytes[input_offset], size);
-    input_offset += size;
+    memcpy(buffer_out, &original_bytes[read_offset], size);
+    read_offset += size;
     return size;
   }
 
   void init_cabac_decoder(CABACContext *c, const uint8_t *buf, int size) {
     uint8_t *found = (uint8_t*) memmem(
-        &input_bytes[last_bit_block_end], input_offset-last_bit_block_end,
+        &original_bytes[last_bit_block_end], read_offset-last_bit_block_end,
         buf, size);
     if (found != nullptr) {
-      int gap = found - &input_bytes[last_bit_block_end];
-      out.add_raw_blocks(&input_bytes[last_bit_block_end], gap);
-      out.add_cabac_blocks(&input_bytes[last_bit_block_end + gap], size);
+      int gap = found - &original_bytes[last_bit_block_end];
+      out.add_raw_blocks(&original_bytes[last_bit_block_end], gap);
+      out.add_cabac_blocks(&original_bytes[last_bit_block_end + gap], size);
       last_bit_block_end += gap + size;
       std::cerr << "compressing bit block after gap: " << gap << " size: " << size << std::endl;
+    } else {
+      std::cerr << "cabac block with escapes, size: " << size << std::endl;
     }
   }
 
  private:
   std::string input_filename;
-  uint8_t *input_bytes = nullptr;
-  size_t input_size = 0;
-  int input_offset = 0;
+  std::ostream& out_stream;
+
+  uint8_t *original_bytes = nullptr;
+  size_t original_size = 0;
+  int read_offset = 0;
 
   int last_bit_block_end = 0;
 
@@ -173,17 +179,83 @@ compressor::run() {
   decode_video(format_ctx.get(), &coding_hooks);
 
   // Flush the final block to the output and write to stdout.
-  std::cerr << "final gap: " << input_size - last_bit_block_end << std::endl;
-  out.add_raw_blocks(&input_bytes[last_bit_block_end], input_size - last_bit_block_end);
-
-  std::string out_string;
-  out.SerializeToString(&out_string);
-  std::cout << out_string;
+  std::cerr << "final gap: " << original_size - last_bit_block_end << std::endl;
+  out.add_raw_blocks(&original_bytes[last_bit_block_end], original_size - last_bit_block_end);
+  out_stream << out.SerializeAsString();
 }
 
 
+class decompressor {
+ public:
+  decompressor(const std::string& input_filename_in, std::ostream& out_stream_in)
+    : input_filename(input_filename_in), out_stream(out_stream_in) {
+    uint8_t *bytes;
+    size_t size;
+    if (av_file_map(input_filename.c_str(), &bytes, &size, 0, NULL) < 0) {
+      throw std::invalid_argument("Failed to open file: " + input_filename);
+    }
+    in.ParseFromArray(bytes, size);
+  }
+
+  void run();
+
+  int read_packet(uint8_t *buffer_out, int size) {
+    return 0;
+  }
+
+  void init_cabac_decoder(CABACContext *c, const uint8_t *buf, int size) {
+    int gap = 0;
+    std::cerr << "compressing bit block after gap: " << gap << " size: " << size << std::endl;
+  }
+
+ private:
+  std::string input_filename;
+  std::ostream& out_stream;
+
+  Recoded in;
+};
+
+
 void
-decompress(const std::string& input_filename) {
+decompressor::run() {
+  for (int i = 0; i < in.raw_blocks_size()-1; i++) {
+    out_stream << in.raw_blocks(i);
+    out_stream << in.cabac_blocks(i);
+  }
+  out_stream << in.raw_blocks(in.raw_blocks_size()-1);
+#if 0
+  const size_t avio_ctx_buffer_size = 1024*1024;
+  auto avio_ctx_buffer = av_unique_ptr(av_malloc(avio_ctx_buffer_size));
+
+  // Set up the IO context to read from our read_packet hook.
+  auto format_ctx = av_unique_ptr(avformat_alloc_context(), avformat_close_input);
+  format_ctx->pb = avio_alloc_context(
+      (uint8_t*)avio_ctx_buffer.release(),  // input buffer
+      avio_ctx_buffer_size,                 // input buffer size
+      false,                                // stream is not writable
+      this,                                 // first argument for read_packet()
+      &hooks<decompressor>::read_packet,    // read callback
+      nullptr,                              // write_packet()
+      nullptr);                             // seek()
+  defer<> free_avio_ctx([&](){
+    av_freep(&format_ctx->pb->buffer);  // May no longer be avio_ctx_buffer.
+    av_freep(&format_ctx->pb);
+  });
+
+  // Open the input file (reading from the already in-memory blocks) and dump stream info.
+  AVFormatContext *input_format_ctx = format_ctx.get();
+  if (avformat_open_input(&input_format_ctx, input_filename.c_str(), nullptr, nullptr) < 0) {
+    throw std::invalid_argument("Failed to open file: " + input_filename);
+  }
+
+  // Run through all the frames in the file, building the output using our hooks.
+  AVCodecCodingHooks coding_hooks = hooks<decompressor>::coding_hooks(this);
+  decode_video(format_ctx.get(), &coding_hooks);
+
+  // Flush the final block to the output and write to stdout.
+//  std::cerr << "final gap: " << original_size - last_bit_block_end << std::endl;
+//  out.add_raw_blocks(&original_bytes[last_bit_block_end], original_size - last_bit_block_end);
+#endif
 }
 
 
@@ -191,18 +263,26 @@ int
 main(int argc, char **argv) {
   av_register_all();
 
-  if (argc != 3) {
-    std::cerr << "Usage: " << argv[0] << " [compress|decompress] <file>" << std::endl;
+  if (argc < 3 || argc > 4) {
+    std::cerr << "Usage: " << argv[0] << " [compress|decompress] <input> [output]" << std::endl;
     return 1;
   }
   std::string command = argv[1];
   std::string input_filename = argv[2];
+  std::ostream *out = &std::cout;
+  std::ofstream out_file;
+  if (argc > 3) {
+    out_file.open(argv[3]);
+    out = &out_file;
+  }
 
   try {
     if (command == "compress") {
-      compressor(input_filename).run();
+      compressor c(input_filename, *out);
+      c.run();
     } else if (command == "decompress") {
-      decompress(input_filename);
+      decompressor d(input_filename, *out);
+      d.run();
     } else {
       throw std::invalid_argument("Unknown command: " + command);
     }
