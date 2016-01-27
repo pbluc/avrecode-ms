@@ -63,9 +63,11 @@ struct hooks {
 template <typename Driver>
 class decoder {
  public:
-  decoder(Driver *driver) : driver(driver), coding_hooks(hooks<Driver>::coding_hooks(driver)) {
+  decoder(Driver *driver, const std::string& input_filename)
+    : driver(driver), coding_hooks(hooks<Driver>::coding_hooks(driver)) {
     const size_t avio_ctx_buffer_size = 1024*1024;
     uint8_t *avio_ctx_buffer = (uint8_t*)av_malloc(avio_ctx_buffer_size);
+
     format_ctx = avformat_alloc_context();
     if (avio_ctx_buffer == nullptr || format_ctx == nullptr) throw std::bad_alloc();
     format_ctx->pb = avio_alloc_context(
@@ -76,6 +78,10 @@ class decoder {
         &hooks<Driver>::read_packet,          // read callback
         nullptr,                              // write_packet()
         nullptr);                             // seek()
+
+    if (avformat_open_input(&format_ctx, input_filename.c_str(), nullptr, nullptr) < 0) {
+      throw std::invalid_argument("Failed to open file: " + input_filename);
+    }
   }
   ~decoder() {
     for (int i = 0; i < format_ctx->nb_streams; i++) {
@@ -86,13 +92,9 @@ class decoder {
     avformat_close_input(&format_ctx);
   }
 
-  // Open the input file and dump stream info. Only used by compressor, because
-  // hooks are not set here. Reads from already in-memory blocks.
-  void dump_stream_info(const std::string& input_filename) {
-    if (avformat_open_input(&format_ctx, input_filename.c_str(), nullptr, nullptr) < 0) {
-      throw std::invalid_argument("Failed to open file: " + input_filename);
-    }
-
+  // Read enough frames to display stream diagnostics. Only used by compressor,
+  // because hooks are not yet set. Reads from already in-memory blocks.
+  void dump_stream_info() {
     if (avformat_find_stream_info(format_ctx, nullptr) < 0) {
       throw std::runtime_error("Invalid input stream information.\n");
     }
@@ -145,8 +147,8 @@ class compressor {
 
   void run() {
     // Run through all the frames in the file, building the output using our hooks.
-    decoder<compressor> d(this);
-    d.dump_stream_info(input_filename);
+    decoder<compressor> d(this, input_filename);
+    d.dump_stream_info();
     d.decode_video();
 
     // Flush the final block to the output and write to stdout.
@@ -211,20 +213,44 @@ class decompressor {
   }
 
   void run() {
-    for (int i = 0; i < in.raw_blocks_size()-1; i++) {
-      out_stream << in.raw_blocks(i);
-      out_stream << in.cabac_blocks(i);
-    }
-    out_stream << in.raw_blocks(in.raw_blocks_size()-1);
+    decoder<decompressor> d(this, input_filename);
+    d.decode_video();
   }
 
   int read_packet(uint8_t *buffer_out, int size) {
-    return 0;
+    uint8_t *p = buffer_out;
+    while (size > 0) {
+      if (read_index >= in.raw_blocks_size()) {
+        break;
+      }
+      const std::string& raw = in.raw_blocks(read_index);
+      if (read_offset_raw < raw.size()) {
+        int n = raw.copy((char*)p, size, read_offset_raw);
+        read_offset_raw += n;
+        p += n;
+        size -= n;
+      } else if (read_index < in.cabac_blocks_size() &&
+          read_offset_cabac < in.cabac_blocks(read_index).size()) {
+        const std::string& cabac = in.cabac_blocks(read_index);
+        int n = cabac.copy((char*)p, size, read_offset_cabac);
+        read_offset_cabac += n;
+        p += n;
+        size -= n;
+      } else {
+        out_stream << in.raw_blocks(read_index);
+        if (read_index < in.cabac_blocks_size()) {
+          out_stream << in.cabac_blocks(read_index);
+        }
+        read_index++;
+        read_offset_raw = read_offset_cabac = 0;
+      }
+    }
+    return p - buffer_out;
   }
 
   void init_cabac_decoder(CABACContext *c, const uint8_t *buf, int size) {
-    int gap = 0;
-    std::cerr << "compressing bit block after gap: " << gap << " size: " << size << std::endl;
+//    int gap = 0;
+//    std::cerr << "compressing bit block after gap: " << gap << " size: " << size << std::endl;
   }
 
  private:
@@ -232,6 +258,7 @@ class decompressor {
   std::ostream& out_stream;
 
   Recoded in;
+  int read_index = 0, read_offset_raw = 0, read_offset_cabac = 0;
 };
 
 
