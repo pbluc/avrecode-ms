@@ -6,6 +6,6 @@ message Recoded {
     optional int64 binary_timestamp = 4;
   };
   optional Metadata metadata = 1;
-  repeated bytes raw_blocks = 2;
+  repeated bytes literal_blocks = 2;
   repeated bytes cabac_blocks = 3;
 };

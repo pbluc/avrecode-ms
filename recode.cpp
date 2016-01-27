@@ -153,7 +153,7 @@ class compressor {
 
     // Flush the final block to the output and write to stdout.
     //std::cerr << "final gap: " << original_size - last_bit_block_end << std::endl;
-    out.add_raw_blocks(&original_bytes[last_bit_block_end], original_size - last_bit_block_end);
+    out.add_literal_blocks(&original_bytes[last_bit_block_end], original_size - last_bit_block_end);
     out_stream << out.SerializeAsString();
   }
 
@@ -173,7 +173,7 @@ class compressor {
         buf, size);
     if (found != nullptr) {
       int gap = found - &original_bytes[last_bit_block_end];
-      out.add_raw_blocks(&original_bytes[last_bit_block_end], gap);
+      out.add_literal_blocks(&original_bytes[last_bit_block_end], gap);
       out.add_cabac_blocks(&original_bytes[last_bit_block_end + gap], size);
       last_bit_block_end += gap + size;
       //std::cerr << "compressing bit block after gap: " << gap << " size: " << size << std::endl;
@@ -220,13 +220,13 @@ class decompressor {
   int read_packet(uint8_t *buffer_out, int size) {
     uint8_t *p = buffer_out;
     while (size > 0) {
-      if (read_index >= in.raw_blocks_size()) {
+      if (read_index >= in.literal_blocks_size()) {
         break;
       }
-      const std::string& raw = in.raw_blocks(read_index);
-      if (read_offset_raw < raw.size()) {
-        int n = raw.copy((char*)p, size, read_offset_raw);
-        read_offset_raw += n;
+      const std::string& literal = in.literal_blocks(read_index);
+      if (read_offset_literal < literal.size()) {
+        int n = literal.copy((char*)p, size, read_offset_literal);
+        read_offset_literal += n;
         p += n;
         size -= n;
       } else if (read_index < in.cabac_blocks_size() &&
@@ -237,12 +237,12 @@ class decompressor {
         p += n;
         size -= n;
       } else {
-        out_stream << in.raw_blocks(read_index);
+        out_stream << in.literal_blocks(read_index);
         if (read_index < in.cabac_blocks_size()) {
           out_stream << in.cabac_blocks(read_index);
         }
         read_index++;
-        read_offset_raw = read_offset_cabac = 0;
+        read_offset_literal = read_offset_cabac = 0;
       }
     }
     return p - buffer_out;
@@ -258,7 +258,7 @@ class decompressor {
   std::ostream& out_stream;
 
   Recoded in;
-  int read_index = 0, read_offset_raw = 0, read_offset_cabac = 0;
+  int read_index = 0, read_offset_literal = 0, read_offset_cabac = 0;
 };
 
 
