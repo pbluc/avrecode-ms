@@ -9,9 +9,10 @@ LDLIBS = -L./ffmpeg/libavdevice -lavdevice \
 	 -L./ffmpeg/libswresample -lswresample \
 	 -L./ffmpeg/libswscale -lswscale \
 	 -L./ffmpeg/libavutil -lavutil \
-	 $(EXTRALIBS)
+	 $(EXTRALIBS) \
+	 -lc++
 
-recode: recode.o
+recode: recode.o ffmpeg/libavcodec/libavcodec.a
 
 clean:
 	rm -f recode recode.o

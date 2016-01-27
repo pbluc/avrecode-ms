@@ -1,0 +1,4 @@
+[submodule "libavcodec-hooks"]
+  path = ffmpeg
+  url = git@github.com:dropbox/libavcodec-hooks.git
+  update = rebase
