@@ -43,11 +43,11 @@ struct defer {
 template <typename T>
 struct hooks {
   static int read_packet(void *opaque, uint8_t *buffer_out, int size) {
-    T* object = (T*)opaque;
+    T* object = static_cast<T*>(opaque);
     return object->read_packet(buffer_out, size);
   }
   static void init_cabac_decoder(void *opaque, CABACContext *c, const uint8_t *buf, int size) {
-    T* object = (T*)opaque;
+    T* object = static_cast<T*>(opaque);
     object->init_cabac_decoder(c, buf, size);
   }
   static AVCodecCodingHooks coding_hooks(T* object) {
@@ -66,7 +66,7 @@ class decoder {
   decoder(Driver *driver, const std::string& input_filename)
     : driver(driver), coding_hooks(hooks<Driver>::coding_hooks(driver)) {
     const size_t avio_ctx_buffer_size = 1024*1024;
-    uint8_t *avio_ctx_buffer = (uint8_t*)av_malloc(avio_ctx_buffer_size);
+    uint8_t *avio_ctx_buffer = static_cast<uint8_t*>(av_malloc(avio_ctx_buffer_size));
 
     format_ctx = avformat_alloc_context();
     if (avio_ctx_buffer == nullptr || format_ctx == nullptr) throw std::bad_alloc();
@@ -168,9 +168,11 @@ class compressor {
   }
 
   void init_cabac_decoder(CABACContext *c, const uint8_t *buf, int size) {
-    uint8_t *found = (uint8_t*) memmem(
+    if (size < 8) return;  // Not enough space for surrogate header and index.
+
+    uint8_t *found = static_cast<uint8_t*>( memmem(
         &original_bytes[last_bit_block_end], read_offset-last_bit_block_end,
-        buf, size);
+        buf, size) );
     if (found != nullptr) {
       int gap = found - &original_bytes[last_bit_block_end];
       out.add_literal_blocks(&original_bytes[last_bit_block_end], gap);
@@ -179,6 +181,9 @@ class compressor {
       //std::cerr << "compressing bit block after gap: " << gap << " size: " << size << std::endl;
     } else {
       //std::cerr << "cabac block with escapes, size: " << size << std::endl;
+      if (*reinterpret_cast<const uint32_t*>(buf) == 0UL) {
+        throw std::runtime_error("Can't compress this file, CABAC block starts with 4 zeros (unlikely!).");
+      }
     }
   }
 
@@ -225,15 +230,15 @@ class decompressor {
       }
       const std::string& literal = in.literal_blocks(read_index);
       if (read_offset_literal < literal.size()) {
-        int n = literal.copy((char*)p, size, read_offset_literal);
+        int n = literal.copy(reinterpret_cast<char*>(p), size, read_offset_literal);
         read_offset_literal += n;
         p += n;
         size -= n;
       } else if (read_index < in.cabac_blocks_size() &&
-          read_offset_cabac < in.cabac_blocks(read_index).size()) {
-        const std::string& cabac = in.cabac_blocks(read_index);
-        int n = cabac.copy((char*)p, size, read_offset_cabac);
-        read_offset_cabac += n;
+          read_offset_surrogate < in.cabac_blocks(read_index).size()) {
+        std::string surrogate = make_surrogate_block(read_index);
+        int n = surrogate.copy(reinterpret_cast<char*>(p), size, read_offset_surrogate);
+        read_offset_surrogate += n;
         p += n;
         size -= n;
       } else {
@@ -242,23 +247,55 @@ class decompressor {
           out_stream << in.cabac_blocks(read_index);
         }
         read_index++;
-        read_offset_literal = read_offset_cabac = 0;
+        read_offset_literal = read_offset_surrogate = 0;
       }
     }
     return p - buffer_out;
   }
 
   void init_cabac_decoder(CABACContext *c, const uint8_t *buf, int size) {
-//    int gap = 0;
-//    std::cerr << "compressing bit block after gap: " << gap << " size: " << size << std::endl;
+    int surrogate_index = recognize_surrogate_block(buf, size);
+    if (surrogate_index >= 0) {
+      std::cerr << "Substituting CABAC block of size: " << size << " from index: " << surrogate_index << " current read_index is: " << read_index << std::endl;
+      const std::string& cabac = in.cabac_blocks(surrogate_index);
+      cabac.copy(reinterpret_cast<char*>(const_cast<uint8_t*>(buf)), size);
+    }
   }
 
  private:
+  std::string make_surrogate_block(int index) {
+    const std::string& cabac = in.cabac_blocks(index);
+    if (cabac.size() < 8) throw std::runtime_error("Invalid surrogate block size.");
+    if (index >= surrogate_index_max) throw std::runtime_error("Can't decode, too many surrogate blocks in file. (Unlikely to happen but could be fixed with decoder changes.)");
+
+    uint32_t header[2] = { surrogate_marker, surrogate_index_base + index };
+    std::string surrogate(reinterpret_cast<char*>(&header[0]), sizeof(header));
+    surrogate.resize(cabac.size(), 'X');  // NAL-safe padding.
+    return surrogate;
+  }
+  
+  int recognize_surrogate_block(const uint8_t* buf, int size) {
+    if (size < 8) return -1;
+    const uint32_t *header = reinterpret_cast<const uint32_t*>(buf);
+    if (header[0] != surrogate_marker) return -1;
+
+    int index = header[1] - surrogate_index_base;
+    if (index >= in.cabac_blocks_size()) throw std::runtime_error("Invalid surrogate block index.");
+    const std::string& cabac = in.cabac_blocks(index);
+    if (cabac.size() != size) throw std::runtime_error("Invalid surrogate block size.");
+    return index;
+  }
+
   std::string input_filename;
   std::ostream& out_stream;
 
   Recoded in;
-  int read_index = 0, read_offset_literal = 0, read_offset_cabac = 0;
+  int read_index = 0, read_offset_literal = 0, read_offset_surrogate = 0;
+
+  // Chosen for NAL-safe encoding: no sequences of '\x00\x00\x0[0123]'.
+  const uint32_t surrogate_marker = 0x12345678;
+  const uint32_t surrogate_index_base = 0x01030101;
+  const uint32_t surrogate_index_max = 0x02000000 - surrogate_index_base;
 };
 
 
