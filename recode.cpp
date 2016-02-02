@@ -118,16 +118,45 @@ class decoder {
     decoder *self = static_cast<decoder*>(opaque);
     return self->driver->read_packet(buffer_out, size);
   }
-  static void* init_cabac_decoder(void *opaque, CABACContext *ctx, const uint8_t *buf, int size) {
-    decoder *self = static_cast<decoder*>(opaque);
-    auto *cabac_decoder = new typename Driver::cabac_decoder(self->driver, ctx, buf, size);
-    self->cabac_contexts[ctx].reset(cabac_decoder);
-    return cabac_decoder;
-  }
+  struct cabac {
+    static void* init_decoder(void *opaque, CABACContext *ctx, const uint8_t *buf, int size) {
+      decoder *self = static_cast<decoder*>(opaque);
+      auto *cabac_decoder = new typename Driver::cabac_decoder(self->driver, ctx, buf, size);
+      self->cabac_contexts[ctx].reset(cabac_decoder);
+      return cabac_decoder;
+    }
+    static int get(void *opaque, uint8_t *state) {
+      auto *self = static_cast<typename Driver::cabac_decoder*>(opaque);
+      return self->get(state);
+    }
+    static int get_bypass(void *opaque) {
+      auto *self = static_cast<typename Driver::cabac_decoder*>(opaque);
+      return self->get_bypass();
+    }
+    static int get_bypass_sign(void *opaque, int val) {
+      auto *self = static_cast<typename Driver::cabac_decoder*>(opaque);
+      return self->get_bypass_sign(val);
+    }
+    static int get_terminate(void *opaque) {
+      auto *self = static_cast<typename Driver::cabac_decoder*>(opaque);
+      return self->get_terminate();
+    }
+    static const uint8_t* skip_bytes(void *opaque, int n) {
+      throw std::runtime_error("Not implemented: CABAC decoder doesn't use skip_bytes.");
+    }
+  };
 
   Driver *driver;
   AVFormatContext *format_ctx;
-  AVCodecCodingHooks coding_hooks = { this, { init_cabac_decoder } };
+  AVCodecCodingHooks coding_hooks = { this, {
+      cabac::init_decoder,
+      cabac::get,
+      cabac::get_bypass,
+      cabac::get_bypass_sign,
+      cabac::get_terminate,
+      cabac::skip_bytes,
+    },
+  };
   std::map<CABACContext*, std::unique_ptr<typename Driver::cabac_decoder>> cabac_contexts;
 };
 
@@ -166,16 +195,37 @@ class compressor {
 
   class cabac_decoder {
    public:
-    cabac_decoder(compressor *c, CABACContext *ctx, const uint8_t *buf, int size) {
-      ::ff_reset_cabac_decoder(ctx, buf, size);
+    cabac_decoder(compressor *c, CABACContext *ctx_in, const uint8_t *buf, int size) {
       out = c->find_next_coded_block_and_emit_literal(buf, size);
       if (out == nullptr) out = &out_to_ignore;
+      ctx = *ctx_in;
+      ctx.coding_hooks = nullptr;
+      ctx.coding_hooks_opaque = nullptr;
+      ::ff_reset_cabac_decoder(&ctx, buf, size);
+
       out->set_cabac(buf, size);
+    }
+
+    int get(uint8_t *state) {
+      return ::ff_get_cabac(&ctx, state);
+    }
+
+    int get_bypass() {
+      return ::ff_get_cabac_bypass(&ctx);
+    }
+
+    int get_bypass_sign(int val) {
+      return ::ff_get_cabac_bypass_sign(&ctx, val);
+    }
+
+    int get_terminate() {
+      return ::ff_get_cabac_terminate(&ctx);
     }
 
    private:
     Recoded::Block *out;
     Recoded::Block out_to_ignore;
+    CABACContext ctx;
   };
 
  private:
@@ -291,26 +341,53 @@ class decompressor {
 
   class cabac_decoder {
    public:
-    cabac_decoder(decompressor *d, CABACContext *ctx, const uint8_t *buf, int size) {
-      int index = d->recognize_surrogate_block(buf, size);
-      const Recoded::Block& block = d->in.block(index);
-      if (block.has_cabac()) {
-        block.cabac().copy(reinterpret_cast<char*>(const_cast<uint8_t*>(buf)), size);
+    cabac_decoder(decompressor *d, CABACContext *ctx_in, const uint8_t *buf, int size) {
+      int index = d->recognize_coded_block(buf, size);
+      block = &d->in.block(index);
+      if (block->has_cabac()) {
+        ctx = *ctx_in;
+        ctx.coding_hooks = nullptr;
+        ctx.coding_hooks_opaque = nullptr;
+
+        block->cabac().copy(reinterpret_cast<char*>(const_cast<uint8_t*>(buf)), size);
+        ::ff_reset_cabac_decoder(&ctx, buf, size);
+
         out = &d->blocks[index];
-        out->done = true;
-        out->out_bytes = block.cabac();
-      } else if (block.has_skip_coded()) {
+      } else if (block->has_skip_coded()) {
         // We're skipping this block, so disable calls to our hooks.
-        ctx->coding_hooks = nullptr;
-        ctx->coding_hooks_opaque = nullptr;
+        ctx_in->coding_hooks = nullptr;
+        ctx_in->coding_hooks_opaque = nullptr;
+        ::ff_reset_cabac_decoder(ctx_in, buf, size);
       } else {
         throw std::runtime_error("Expected CABAC block.");
       }
-      ::ff_reset_cabac_decoder(ctx, buf, size);
+    }
+
+    int get(uint8_t *state) {
+      return ::ff_get_cabac(&ctx, state);
+    }
+
+    int get_bypass() {
+      return ::ff_get_cabac_bypass(&ctx);
+    }
+
+    int get_bypass_sign(int val) {
+      return ::ff_get_cabac_bypass_sign(&ctx, val);
+    }
+
+    int get_terminate() {
+      int n = ::ff_get_cabac_terminate(&ctx);
+      if (n) {
+        out->done = true;
+        out->out_bytes = block->cabac();
+      }
+      return n;
     }
 
    private:
+    const Recoded::Block *block;
     block_state *out = nullptr;
+    CABACContext ctx;
   };
 
  private:
@@ -334,7 +411,7 @@ class decompressor {
     return surrogate_block;
   }
 
-  int recognize_surrogate_block(const uint8_t* buf, int size) {
+  int recognize_coded_block(const uint8_t* buf, int size) {
     while (!blocks[next_coded_block].coded) {
       if (next_coded_block >= read_index) {
         throw std::runtime_error("Coded block expected, but not recorded in the compressed data.");
