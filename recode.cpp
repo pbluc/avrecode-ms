@@ -4,6 +4,7 @@
 #include <map>
 #include <sstream>
 #include <typeinfo>
+#include <vector>
 
 extern "C" {
 #include "libavcodec/avcodec.h"
@@ -208,6 +209,14 @@ class compressor {
 
 
 class decompressor {
+  // Used to track the decoding state of each block.
+  struct block_state {
+    bool coded = false;
+    std::string surrogate_marker;
+    std::string out_bytes;
+    bool done = false;
+  };
+
  public:
   decompressor(const std::string& input_filename, std::ostream& out_stream)
     : input_filename(input_filename), out_stream(out_stream) {
@@ -224,8 +233,16 @@ class decompressor {
   }
 
   void run() {
+    blocks.clear();
+    blocks.resize(in.block_size());
+
     decoder<decompressor> d(this, input_filename);
     d.decode_video();
+
+    for (const auto& block : blocks) {
+      if (!block.done) throw std::runtime_error("Not all blocks were decoded.");
+      out_stream << block.out_bytes;
+    }
   }
 
   int read_packet(uint8_t *buffer_out, int size) {
@@ -233,12 +250,26 @@ class decompressor {
     while (size > 0 && read_index < in.block_size()) {
       if (read_block.empty()) {
         const Recoded::Block& block = in.block(read_index);
+        if (int(block.has_literal()) + int(block.has_cabac()) + int(block.has_skip_coded()) != 1) {
+          throw std::runtime_error("Invalid input block: must have exactly one type");
+        }
         if (block.has_literal()) {
+          // This block is passed through without any re-coding.
+          blocks[read_index].out_bytes = block.literal();
+          blocks[read_index].done = true;
           read_block = block.literal();
         } else if (block.has_cabac()) {
-          read_block += make_surrogate_block(read_index, block.cabac().size());
+          // Re-coded CABAC coded block. out_bytes will be filled by cabac_decoder.
+          blocks[read_index].coded = true;
+          blocks[read_index].surrogate_marker = next_surrogate_marker();
+          blocks[read_index].done = false;
+          read_block = make_surrogate_block(blocks[read_index].surrogate_marker, block.cabac().size());
         } else if (block.has_skip_coded()) {
-          surrogate_queue.push_back(std::make_pair("", read_index));
+          // Non-re-coded CABAC coded block. The bytes of this block are
+          // emitted in a literal block following this one. This block is
+          // a flag to expect a cabac_decoder without a surrogate marker.
+          blocks[read_index].coded = true;
+          blocks[read_index].done = true;
         } else {
           throw std::runtime_error("Unknown input block type");
         }
@@ -250,9 +281,6 @@ class decompressor {
         size -= n;
       }
       if (read_offset >= read_block.size()) {
-        out_stream << in.block(read_index).literal();
-        out_stream << in.block(read_index).cabac();
-
         read_block.clear();
         read_offset = 0;
         read_index++;
@@ -264,66 +292,75 @@ class decompressor {
   class cabac_decoder {
    public:
     cabac_decoder(decompressor *d, CABACContext *ctx, const uint8_t *buf, int size) {
-      const Recoded::Block& block = d->recognize_surrogate_block(buf, size);
+      int index = d->recognize_surrogate_block(buf, size);
+      const Recoded::Block& block = d->in.block(index);
       if (block.has_cabac()) {
         block.cabac().copy(reinterpret_cast<char*>(const_cast<uint8_t*>(buf)), size);
+        out = &d->blocks[index];
+        out->done = true;
+        out->out_bytes = block.cabac();
+      } else if (block.has_skip_coded()) {
+        // We're skipping this block, so disable calls to our hooks.
+        ctx->coding_hooks = nullptr;
+        ctx->coding_hooks_opaque = nullptr;
+      } else {
+        throw std::runtime_error("Expected CABAC block.");
       }
       ::ff_reset_cabac_decoder(ctx, buf, size);
     }
+
+   private:
+    block_state *out = nullptr;
   };
 
  private:
-  std::string make_surrogate_block(int index, int size) {
-    if (size < SURROGATE_MARKER_BYTES) {
-      throw std::runtime_error("Invalid surrogate block size: " + std::to_string(size));
-    }
-    std::string surrogate = next_surrogate_marker();
-    surrogate_queue.push_back(std::make_pair(surrogate, index));
-    surrogate.resize(size, 'X');  // NAL-encoding-safe padding.
-    return surrogate;
-  }
-
   // Return a unique 8-byte string containing no zero bytes (NAL-encoding-safe).
   std::string next_surrogate_marker() {
-    if (surrogate_marker.empty()) {
-      surrogate_marker.resize(SURROGATE_MARKER_BYTES, '\x01');
-    }
+    uint64_t n = surrogate_marker_sequence_number++;
+    std::string surrogate_marker(SURROGATE_MARKER_BYTES, '\x01');
     for (int i = 0; i < surrogate_marker.size(); i++) {
-      if (surrogate_marker[i] != '\xFF') {
-        surrogate_marker[i]++;
-        return surrogate_marker;
-      } else {
-        // Reset to 1 and carry.
-        surrogate_marker[i] = '\x01';
-      }
+      surrogate_marker[i] = (n % 255) + 1;
+      n /= 255;
     }
-    throw std::runtime_error("More than 255^8 (~2^64) surrogate blocks (very unlikely).");
+    return surrogate_marker;
   }
   
-  const Recoded::Block& recognize_surrogate_block(const uint8_t* buf, int size) {
-    if (surrogate_queue.empty()) {
-      throw std::runtime_error("Coded block expected, but not recorded in the compressed data.");
+  std::string make_surrogate_block(const std::string& surrogate_marker, int size) {
+    if (size < surrogate_marker.size()) {
+      throw std::runtime_error("Invalid coded block size for surrogate: " + std::to_string(size));
     }
-    const std::string& expected_surrogate_marker = surrogate_queue.front().first;
-    int index = surrogate_queue.front().second;
+    std::string surrogate_block = surrogate_marker;
+    surrogate_block.resize(size, 'X');  // NAL-encoding-safe padding.
+    return surrogate_block;
+  }
+
+  int recognize_surrogate_block(const uint8_t* buf, int size) {
+    while (!blocks[next_coded_block].coded) {
+      if (next_coded_block >= read_index) {
+        throw std::runtime_error("Coded block expected, but not recorded in the compressed data.");
+      }
+      next_coded_block++;
+    }
+    int index = next_coded_block++;
+    // Validate the decoder init call against the coded block's size and surrogate marker.
     const Recoded::Block& block = in.block(index);
-    surrogate_queue.pop_front();
-
-    if (expected_surrogate_marker.empty()) {
-      if (!block.has_skip_coded()) throw std::runtime_error("Corrupt surrogate_queue");
-      if (block.skip_coded() != size) throw std::runtime_error("Invalid skip_coded block size");
-      return block;
+    if (block.has_cabac()) {
+      if (block.cabac().size() != size) {
+        throw std::runtime_error("Invalid surrogate block size.");
+      }
+      std::string buf_header(reinterpret_cast<const char*>(buf),
+          blocks[index].surrogate_marker.size());
+      if (blocks[index].surrogate_marker != buf_header) {
+        throw std::runtime_error("Invalid surrogate marker in coded block.");
+      }
+    } else if (block.has_skip_coded()) {
+      if (block.skip_coded() != size) {
+        throw std::runtime_error("Invalid skip_coded block size.");
+      }
+    } else {
+      throw std::runtime_error("Internal error: expected coded block.");
     }
-
-    if (block.cabac().size() != size) {
-      throw std::runtime_error("Invalid surrogate block size: expected " +
-          std::to_string(block.cabac().size()) + ", got " + std::to_string(size));
-    }
-    std::string buf_header(reinterpret_cast<const char*>(buf), expected_surrogate_marker.size());
-    if (expected_surrogate_marker != buf_header) {
-      throw std::runtime_error("Invalid surrogate marker in coded block.");
-    }
-    return block;
+    return index;
   }
 
   std::string input_filename;
@@ -333,10 +370,16 @@ class decompressor {
   int read_index = 0, read_offset = 0;
   std::string read_block;
 
+  std::vector<block_state> blocks;
+
+  // Counter used to generate surrogate markers for coded blocks.
+  uint64_t surrogate_marker_sequence_number = 1;
+  // Head of the coded block queue - blocks that have been produced by
+  // read_packet but not yet decoded. Tail of the queue is read_index.
+  int next_coded_block = 0;
+
   // List of (surrogate marker, block index) pairs. Blocks with skip_coded have marker=="".
   std::list<std::pair<std::string, int>> surrogate_queue;
-  // Marker for the last surrogate block.
-  std::string surrogate_marker;
 };
 
 
