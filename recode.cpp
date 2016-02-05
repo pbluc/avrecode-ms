@@ -15,6 +15,7 @@ extern "C" {
 #include "libavutil/file.h"
 }
 
+#include "arithmetic_coder.h"
 #include "recode.pb.h"
 
 

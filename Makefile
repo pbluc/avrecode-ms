@@ -1,6 +1,6 @@
 include ffmpeg/config.mak
 
-CXXFLAGS = -std=c++1y -Wall -g -I./ffmpeg \
+CXXFLAGS = -std=c++1y -Wall -g -I. -I./ffmpeg \
 	   $(shell pkg-config --cflags protobuf)
 LDLIBS = -L./ffmpeg/libavdevice -lavdevice \
 	 -L./ffmpeg/libavformat -lavformat \
@@ -15,10 +15,14 @@ LDLIBS = -L./ffmpeg/libavdevice -lavdevice \
 
 recode: recode.o recode.pb.o ffmpeg/libavcodec/libavcodec.a
 
-recode.o: recode.cpp recode.pb.h
+recode.o: recode.cpp recode.pb.h arithmetic_code.h cabac_code.h
 
 recode.pb.cc recode.pb.h: recode.proto
 	protoc --cpp_out=. $<
+
+test/arithmetic_code: test/arithmetic_code.o
+
+test/arithmetic_code.o: test/arithmetic_code.cpp arithmetic_code.h cabac_code.h
 
 clean:
 	rm -f recode recode.o recode.pb.{cc,h,o}
