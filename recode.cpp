@@ -15,7 +15,7 @@ extern "C" {
 #include "libavutil/file.h"
 }
 
-#include "arithmetic_coder.h"
+#include "cabac_code.h"
 #include "recode.pb.h"
 
 
@@ -134,10 +134,6 @@ class decoder {
       auto *self = static_cast<typename Driver::cabac_decoder*>(opaque);
       return self->get_bypass();
     }
-    static int get_bypass_sign(void *opaque, int val) {
-      auto *self = static_cast<typename Driver::cabac_decoder*>(opaque);
-      return self->get_bypass_sign(val);
-    }
     static int get_terminate(void *opaque) {
       auto *self = static_cast<typename Driver::cabac_decoder*>(opaque);
       return self->get_terminate();
@@ -153,7 +149,6 @@ class decoder {
       cabac::init_decoder,
       cabac::get,
       cabac::get_bypass,
-      cabac::get_bypass_sign,
       cabac::get_terminate,
       cabac::skip_bytes,
     },
@@ -208,25 +203,40 @@ class compressor {
     }
 
     int get(uint8_t *state) {
-      return ::ff_get_cabac(&ctx, state);
+      int symbol = ::ff_get_cabac(&ctx, state);
+      auto* e = &estimators[state];
+      encoder.put(symbol, [=](uint64_t range){ return (range/(e->pos+e->neg)) * e->pos; });
+      if (symbol) { e->pos++; } else { e->neg++; }
+      if (e->pos + e->neg > 0x60) { e->pos /= 2; e->pos++; e->neg /= 2; e->neg++; }
+      return symbol;
     }
 
     int get_bypass() {
-      return ::ff_get_cabac_bypass(&ctx);
-    }
-
-    int get_bypass_sign(int val) {
-      return ::ff_get_cabac_bypass_sign(&ctx, val);
+      int symbol = ::ff_get_cabac_bypass(&ctx);
+      encoder.put(symbol, [](uint64_t range){ return range/2; });
+      return symbol;
     }
 
     int get_terminate() {
-      return ::ff_get_cabac_terminate(&ctx);
+      int n = ::ff_get_cabac_terminate(&ctx);
+      encoder.put(n != 0, [](uint64_t range){ return range/(2*0x150); });
+      if (n) {
+        encoder.finish();
+        std::cout << "ratio: " << encoder_out.size() * 2.0 / out->cabac().size() << std::endl;
+      }
+      return n;
     }
 
    private:
     Recoded::Block *out;
     Recoded::Block out_to_ignore;
     CABACContext ctx;
+
+    struct estimator { int pos = 1, neg = 1; };
+    std::map<const uint8_t*, estimator> estimators;
+    std::vector<uint16_t> encoder_out;
+    arithmetic_code<uint64_t, uint16_t>::encoder<std::back_insert_iterator<std::vector<uint16_t>>, uint16_t> encoder{
+      std::back_inserter(encoder_out)};
   };
 
  private:
@@ -365,20 +375,37 @@ class decompressor {
     }
 
     int get(uint8_t *state) {
-      return ::ff_get_cabac(&ctx, state);
+      uint8_t encoder_state = *state;
+      int symbol = ::ff_get_cabac(&ctx, state);
+      cabac_encoder.put(symbol, &encoder_state);
+      if (*state != encoder_state) {
+        throw std::runtime_error("encoder/decoder state transition mismatch");
+      }
+      return symbol;
     }
 
     int get_bypass() {
-      return ::ff_get_cabac_bypass(&ctx);
-    }
-
-    int get_bypass_sign(int val) {
-      return ::ff_get_cabac_bypass_sign(&ctx, val);
+      int symbol = ::ff_get_cabac_bypass(&ctx);
+      cabac_encoder.put_bypass(symbol);
+      return symbol;
     }
 
     int get_terminate() {
       int n = ::ff_get_cabac_terminate(&ctx);
+      cabac_encoder.put_terminate(n != 0);
       if (n) {
+        out->out_bytes.assign(reinterpret_cast<const char*>(cabac_out.data()), cabac_out.size());
+        if (out->out_bytes != block->cabac()) {
+          if (out->out_bytes.size() != block->cabac().size()) {
+            std::cout << "cabac block mismatch, sizes: " << out->out_bytes.size() << " " << block->cabac().size() << std::endl;
+          }
+          for (int i = 0; i < out->out_bytes.size(); i++) {
+            if (out->out_bytes[i] != block->cabac()[i]) {
+              std::cout << "cabac block mismatch at byte: " << i << " " << int(uint8_t(out->out_bytes[i])) << "!=" << int(uint8_t(block->cabac()[i])) << " " << int(uint8_t(out->out_bytes[i+1])) << "!=" << int(uint8_t(block->cabac()[i+1])) << std::endl;
+              break;
+            }
+          }
+        }
         out->done = true;
         out->out_bytes = block->cabac();
       }
@@ -388,6 +415,9 @@ class decompressor {
    private:
     const Recoded::Block *block;
     block_state *out = nullptr;
+    std::vector<uint8_t> cabac_out;
+    cabac::encoder<std::back_insert_iterator<std::vector<uint8_t>>> cabac_encoder{
+      std::back_inserter(cabac_out)};
     CABACContext ctx;
   };
 
@@ -455,9 +485,6 @@ class decompressor {
   // Head of the coded block queue - blocks that have been produced by
   // read_packet but not yet decoded. Tail of the queue is read_index.
   int next_coded_block = 0;
-
-  // List of (surrogate marker, block index) pairs. Blocks with skip_coded have marker=="".
-  std::list<std::pair<std::string, int>> surrogate_queue;
 };
 
 

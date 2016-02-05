@@ -34,7 +34,6 @@ int main(int argc, char* argv[]) {
     encoder.put(bits[i], &states[contexts[i]]);
   }
   encoder.put_terminate(true);
-  encoder.finish();
 
   std::vector<uint8_t> compressed_bytes;
   for (uint16_t word : out) {

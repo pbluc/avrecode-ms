@@ -29,8 +29,6 @@ struct cabac {
     // Initial range is set so that (range >> normalize) == 0x1FE as required by CABAC spec.
     explicit encoder(OutputIterator out) : e(out, uint64_t(0x1FE) << (8*sizeof(fixed_point)-10)) {}
 
-    void finish() { e.finish(); }
-
     // Translate CABAC tables into generic arithmetic coding.
     void put(int symbol, uint8_t* state) {
       bool is_less_probable_symbol = (symbol != ((*state) & 1));
@@ -62,7 +60,7 @@ struct cabac {
       });
       
       if (end_of_stream_symbol) {
-        // XXX emit remaining bits?
+        e.finish_cabac();
       }
     }
 
@@ -78,7 +76,7 @@ struct cabac {
       return i;
     }
 
-    cabac_arithmetic_code::encoder<OutputIterator> e;
+    cabac_arithmetic_code::encoder<OutputIterator, uint8_t> e;
   };
 
   class decoder {
