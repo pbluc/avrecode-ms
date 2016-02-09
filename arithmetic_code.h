@@ -2,9 +2,33 @@
 // Generic arithmetic coding. Used both for recoded encoding/decoding and for
 // CABAC re-encoding.
 //
+// Some notes on the data representations used by the encoder and decoder.
+// Uncompressed data:
+//   Symbols: b_1 ... b_n \in {0,1} .
+//   Probabilities: p_1 ... p_n \in [0,1], where p_i estimates the probability that b_i=1.
+// Compressed data:
+//   Arithmetic coding represents a compressed stream of symbols as an
+//   arbitrary-precision number C \in [0,1] .
+//   If the compressed digits in base M are c_k \in {0..M-1}, then
+//   C = \sum_{k=1}^K c_k M^{-k} .
+//   Arithmetic coding uses the probabilities p_i to link the symbols b_i with
+//   the compressed digits c_k:
+//   C_i = (1-p_i) b_i + p_i C_{i+1} (1-b_i)  \in [0,1]
+//   C_1 = C = \sum_{k=1}^K c_k M^{-k}
+//   C_n is an arbitrary value in [0,1]
+// Intermediate representation state:
+//   Maximum R (any positive number, typically 2^k)
+//   Lower and upper bounds x, y \in [0,R)
+//   Range r = y-x \in [0,R)
+// Representation invariant:
+//   C = \sum_{k=1}^{K_i} c_k M^{-k} + M^{-K_i} ( x_i + r_i C_i ) / R_i
+//   Base case: K_1 = 0, x_1 = 0, r_1 = R_1
+// The various encoding and decoding methods modify K, x, r, R while keeping C fixed.
+//
 
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 #include <functional>
 #include <iterator>
@@ -31,7 +55,6 @@ struct arithmetic_code {
   static_assert(min_range < fixed_one/compressed_digit_base, "min_range too large");
 
   // The encoder object takes an output iterator (e.g. to vector or ostream) to emit compressed digits.
-  // Representation invariant: XXX(fill in)
   template <typename OutputIterator,
             typename OutputDigit = typename std::iterator_traits<OutputIterator>::value_type>
   class encoder {
@@ -59,34 +82,18 @@ struct arithmetic_code {
     }
 
     void finish() {
-      // Find the number in [low, low+range) which divides the largest 2^k and ends with a 1 bit.
-      for (FixedPoint stop_bit = fixed_one; stop_bit > 0; stop_bit >>= 1) {
+      // Find largest stop bit 2^k < range, and x such that 2^k divides x,
+      // 2^{k+1} doesn't divide x, and x is in [low, low+range).
+      for (FixedPoint stop_bit = (fixed_one >> 1); stop_bit > 0; stop_bit >>= 1) {
         FixedPoint x = (low | stop_bit) & ~(stop_bit - 1);
-        if (low <= x && x < low + range) {
+        if (stop_bit < range && low <= x && x < low + range) {
           low = x;
           break;
         }
       }
-      range = 0;
-      while (low != 0) {
-        renormalize_and_emit_digit<OutputDigit>();
-      }
-    }
 
-    void finish_cabac() {
-      // Special-case for CABAC, which has a special end sequence. The way
-      // CABAC generates the stop bit doesn't seem to be entirely correct for
-      // arithmetic coding (the lower bound can decrease!) but I guess it works
-      // with the CABAC tables? Or breaks rarely enough to not matter?
-      FixedPoint stop_bit = (1 << 7);
-      while (range >= (1 << 9)) {
-        range >>= 1;
-        stop_bit <<= 1;
-      }
-      low = (low | stop_bit) & ~(stop_bit - 1);
-      range = 0;
-      // Another CABAC special case: omit the last digit when it's only a stop bit.
-      while (low != 0 && low != fixed_one/2) {
+      range = 1;
+      while (low != 0) {
         renormalize_and_emit_digit<OutputDigit>();
       }
     }
@@ -97,19 +104,36 @@ struct arithmetic_code {
       static constexpr FixedPoint digit_base = FixedPoint(std::numeric_limits<Digit>::max()) + 1;
       static constexpr FixedPoint most_significant_digit = fixed_one / digit_base;
 
-      Digit digit = low / most_significant_digit;
-      if (digit != (low + range) / most_significant_digit) {
-        // XXX
-#if 0
-        throw std::runtime_error("overflow not implemented");
-#endif
+      // Check for a carry bit, and cascade from lowest overflow digit to highest.
+      if (low >= fixed_one) {
+        for (int i = overflow.size()-1; i >= 0; i--) {
+          if (++overflow[i] != 0) break;
+        }
+        low -= fixed_one;
       }
+      assert(low < fixed_one);
+
+      // Compare the minimum and maximum possible values of the top digit.
+      // If different, defer emitting the digit until we're sure we won't have to carry.
+      Digit digit = Digit(low / most_significant_digit);
+      if (digit != Digit((low + range - 1) / most_significant_digit)) {
+        assert(range < most_significant_digit);
+        overflow.push_back(digit);
+      } else {
+        for (CompressedDigit overflow_digit : overflow) {
+          emit_digit(overflow_digit);
+        }
+        overflow.clear();
+        emit_digit(digit);
+      }
+
+      // Subtract away the emitted/overflowed digit and renormalize.
       low -= digit * most_significant_digit;
       low *= digit_base;
       range *= digit_base;
-      emit_digit(digit);
     }
 
+    // Emit a CompressedDigit as one or more OutputDigits. Loop should be unrolled by the compiler.
     template <typename Digit>
     void emit_digit(Digit digit) {
       for (int i = sizeof(Digit)-sizeof(OutputDigit); i >= 0; i -= sizeof(OutputDigit)) {
@@ -117,9 +141,14 @@ struct arithmetic_code {
       }
     }
 
+    // Output digits are emitted to this iterator as they are produced.
     OutputIterator out;
+    // The lower bound x. (When overflow.size() > 0, low is the fractional digits of x/R_0.)
     FixedPoint low = 0;
+    // The range r, which starts as fixed-point 1.0.
     FixedPoint range = fixed_one;
+    // High digits of x. If overflow.size() = z, then R = R_0 M^z (where R_0 = fixed_one).
+    std::vector<CompressedDigit> overflow;
   };
 
   class decoder {

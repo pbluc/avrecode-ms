@@ -1,6 +1,7 @@
 include ffmpeg/config.mak
 
-CXXFLAGS = -std=c++1y -Wall -g -O3 -I. -I./ffmpeg \
+#CXXFLAGS += -Wconversion -Wno-sign-conversion
+CXXFLAGS += -std=c++1y -Wall -Werror -g -O3 -I. -I./ffmpeg \
 	   $(shell pkg-config --cflags protobuf)
 LDLIBS = -L./ffmpeg/libavdevice -lavdevice \
 	 -L./ffmpeg/libavformat -lavformat \

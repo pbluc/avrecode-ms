@@ -183,7 +183,7 @@ class compressor {
   }
 
   int read_packet(uint8_t *buffer_out, int size) {
-    size = std::min<int>(size, original_size - read_offset);
+    size = std::min(size, int(original_size - read_offset));
     memcpy(buffer_out, &original_bytes[read_offset], size);
     read_offset += size;
     return size;
@@ -245,7 +245,7 @@ class compressor {
         &original_bytes[prev_coded_block_end], read_offset - prev_coded_block_end,
         buf, size) );
     if (found && size >= SURROGATE_MARKER_BYTES) {
-      int gap = found - &original_bytes[prev_coded_block_end];
+      size_t gap = found - &original_bytes[prev_coded_block_end];
       out.add_block()->set_literal(&original_bytes[prev_coded_block_end], gap);
       prev_coded_block_end += gap + size;
       return out.add_block();  // Return a block for the recoder to fill.
@@ -393,26 +393,34 @@ class decompressor {
     int get_terminate() {
       int n = ::ff_get_cabac_terminate(&ctx);
       cabac_encoder.put_terminate(n != 0);
-      if (n) {
-        out->out_bytes.assign(reinterpret_cast<const char*>(cabac_out.data()), cabac_out.size());
-        if (out->out_bytes != block->cabac()) {
-          if (out->out_bytes.size() != block->cabac().size()) {
-            std::cout << "cabac block mismatch, sizes: " << out->out_bytes.size() << " " << block->cabac().size() << std::endl;
-          }
-          for (int i = 0; i < out->out_bytes.size(); i++) {
-            if (out->out_bytes[i] != block->cabac()[i]) {
-              std::cout << "cabac block mismatch at byte: " << i << " " << int(uint8_t(out->out_bytes[i])) << "!=" << int(uint8_t(block->cabac()[i])) << " " << int(uint8_t(out->out_bytes[i+1])) << "!=" << int(uint8_t(block->cabac()[i+1])) << std::endl;
-              break;
-            }
-          }
-        }
-        out->done = true;
-        out->out_bytes = block->cabac();
+      if (n != 0) {
+        finish();
       }
       return n;
     }
 
    private:
+    void finish() {
+      // Omit trailing byte if it's only a stop bit.
+      if (cabac_out.back() == 0x80) {
+        cabac_out.pop_back();
+      }
+      out->out_bytes.assign(reinterpret_cast<const char*>(cabac_out.data()), cabac_out.size());
+      if (out->out_bytes != block->cabac()) {
+        if (out->out_bytes.size() != block->cabac().size()) {
+          std::cout << "cabac block mismatch, sizes: " << out->out_bytes.size() << " " << block->cabac().size() << std::endl;
+        }
+        for (int i = 0; i < out->out_bytes.size(); i++) {
+          if (out->out_bytes[i] != block->cabac()[i]) {
+            std::cout << "cabac block mismatch at byte: " << i << " " << int(uint8_t(out->out_bytes[i])) << "!=" << int(uint8_t(block->cabac()[i])) << " " << int(uint8_t(out->out_bytes[i+1])) << "!=" << int(uint8_t(block->cabac()[i+1])) << std::endl;
+            break;
+          }
+        }
+      }
+      out->done = true;
+      out->out_bytes = block->cabac();
+    }
+
     const Recoded::Block *block;
     block_state *out = nullptr;
     std::vector<uint8_t> cabac_out;
@@ -433,7 +441,7 @@ class decompressor {
     return surrogate_marker;
   }
   
-  std::string make_surrogate_block(const std::string& surrogate_marker, int size) {
+  std::string make_surrogate_block(const std::string& surrogate_marker, size_t size) {
     if (size < surrogate_marker.size()) {
       throw std::runtime_error("Invalid coded block size for surrogate: " + std::to_string(size));
     }

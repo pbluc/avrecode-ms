@@ -27,7 +27,7 @@ struct cabac {
   class encoder {
    public:
     // Initial range is set so that (range >> normalize) == 0x1FE as required by CABAC spec.
-    explicit encoder(OutputIterator out) : e(out, uint64_t(0x1FE) << (8*sizeof(fixed_point)-10)) {}
+    explicit encoder(OutputIterator out) : e(out, fixed_point(0x1FE) << (8*sizeof(fixed_point)-10)) {}
 
     // Translate CABAC tables into generic arithmetic coding.
     void put(int symbol, uint8_t* state) {
@@ -36,7 +36,7 @@ struct cabac {
         // Find the normalizer such that range >> normalize is between 0x100 and 0x200.
         int normalize = log2(range / 0x100);
         // Use the most significant two bits of range (other than the leading 1) as an index into the table.
-        int range_approx = range >> (normalize-1);
+        int range_approx = int(range >> (normalize-1));
         fixed_point range_of_less_probable_symbol = ff_h264_lps_range[(range_approx & 0x180) + *state];
         return range_of_less_probable_symbol << normalize;
       });
@@ -56,11 +56,11 @@ struct cabac {
     void put_terminate(int end_of_stream_symbol) {
       e.put(end_of_stream_symbol, [](fixed_point range) {
         int normalize = log2(range / 0x100);
-        return 2 << normalize;
+        return fixed_point(2) << normalize;
       });
       
       if (end_of_stream_symbol) {
-        e.finish_cabac();
+        e.finish();
       }
     }
 
