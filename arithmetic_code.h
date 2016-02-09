@@ -92,10 +92,11 @@ struct arithmetic_code {
         }
       }
 
-      range = 1;
       while (low != 0) {
+        range = 1;
         renormalize_and_emit_digit<OutputDigit>();
       }
+      range = 0;  // mark complete
     }
 
    private:

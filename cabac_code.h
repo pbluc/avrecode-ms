@@ -14,9 +14,9 @@ static const uint8_t * const ff_h264_mlps_state = ff_h264_cabac_tables + H264_ML
 
 
 struct cabac {
-  // Word size for encoder/decoder state.
-  typedef uint64_t fixed_point;
-  // Word size for compressed data.
+  // Word size for encoder/decoder state. Reasonable values: uint64_t, uint32_t.
+  typedef uint32_t fixed_point;
+  // Word size for compressed data. Reasonable values: uint16_t, uint8_t.
   typedef uint16_t compressed_digit;
   // min_range must be at least 0x200 so that range/2 never rounds in put_bypass.
   static constexpr int min_range = 0x200;
