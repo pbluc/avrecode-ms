@@ -8,9 +8,10 @@ message Recoded {
   optional Metadata metadata = 1;
 
   message Block {
-    optional bytes literal = 1;
-    optional bytes cabac = 2;
-    optional int64 skip_coded = 3;
+    optional int64 size = 1;
+    optional bytes literal = 2;
+    optional bool skip_coded = 3;  // Always true when present.
+    optional bytes cabac = 4;
   };
   repeated Block block = 2;
 };

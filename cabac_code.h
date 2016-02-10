@@ -27,7 +27,7 @@ struct cabac {
   class encoder {
    public:
     // Initial range is set so that (range >> normalize) == 0x1FE as required by CABAC spec.
-    explicit encoder(OutputIterator out) : e(out, fixed_point(0x1FE) << (8*sizeof(fixed_point)-10)) {}
+    explicit encoder(OutputIterator out) : e(out, (cabac_arithmetic_code::fixed_one/0x200)*0x1FE) {}
 
     // Translate CABAC tables into generic arithmetic coding.
     void put(int symbol, uint8_t* state) {

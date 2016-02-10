@@ -63,6 +63,7 @@ int main(int argc, char* argv[]) {
 
   std::vector<uint8_t> states(0x400);
   std::vector<uint8_t> out;
+#if 0
   cabac::encoder<std::back_insert_iterator<std::vector<uint8_t>>> encoder(std::back_inserter(out));
 
   for (int i = 0; i < bits.size(); i++) {
@@ -88,5 +89,26 @@ int main(int argc, char* argv[]) {
     std::cerr << "mismatch at terminate" << std::endl;
   }
   return 0;
+#else
+  typedef arithmetic_code<uint64_t, uint16_t> code;
+  auto encoder = make_encoder<code>(&out);
+
+  for (int i = 0; i < bits.size(); i++) {
+    encoder.put(bits[i], [](uint64_t range){ return range/2; });
+  }
+  encoder.finish();
+
+  std::cout << "compressed size: " << out.size() << std::endl;
+
+  auto decoder = make_decoder<code>(out);
+  for (int i = 0; i < bits.size(); i++) {
+    int bit = decoder.get([](uint64_t range){ return range/2; });
+    if (bit != bits[i]) {
+      std::cerr << "mismatch at bit: " << i << ", " << bit << " != " << bits[i] << std::endl;
+      return 1;
+    }
+  }
+  return 0;
+#endif
 #endif
 }

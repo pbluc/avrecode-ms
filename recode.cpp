@@ -51,9 +51,9 @@ struct defer {
 
 // Sets up a libavcodec decoder with I/O and decoding hooks.
 template <typename Driver>
-class decoder {
+class av_decoder {
  public:
-  decoder(Driver *driver, const std::string& input_filename) : driver(driver) {
+  av_decoder(Driver *driver, const std::string& input_filename) : driver(driver) {
     const size_t avio_ctx_buffer_size = 1024*1024;
     uint8_t *avio_ctx_buffer = static_cast<uint8_t*>(av_malloc(avio_ctx_buffer_size));
 
@@ -72,7 +72,7 @@ class decoder {
       throw std::invalid_argument("Failed to initialie decoding context: " + input_filename);
     }
   }
-  ~decoder() {
+  ~av_decoder() {
     for (int i = 0; i < format_ctx->nb_streams; i++) {
       avcodec_close(format_ctx->streams[i]->codec);
     }
@@ -117,12 +117,12 @@ class decoder {
  private:
   // Hook stubs - wrap driver into opaque pointers.
   static int read_packet(void *opaque, uint8_t *buffer_out, int size) {
-    decoder *self = static_cast<decoder*>(opaque);
+    av_decoder *self = static_cast<av_decoder*>(opaque);
     return self->driver->read_packet(buffer_out, size);
   }
   struct cabac {
     static void* init_decoder(void *opaque, CABACContext *ctx, const uint8_t *buf, int size) {
-      decoder *self = static_cast<decoder*>(opaque);
+      av_decoder *self = static_cast<av_decoder*>(opaque);
       auto *cabac_decoder = new typename Driver::cabac_decoder(self->driver, ctx, buf, size);
       self->cabac_contexts[ctx].reset(cabac_decoder);
       return cabac_decoder;
@@ -159,7 +159,16 @@ class decoder {
 
 
 // Encoder / decoder for recoded CABAC blocks.
-struct recoded_code : public arithmetic_code<uint32_t, uint8_t> {
+typedef uint32_t range_t;
+typedef arithmetic_code<range_t, uint8_t> recoded_code;
+
+class model {
+ public:
+//  range_t probability_of_1(range_t range) { return range/2; }
+  std::function<range_t(range_t)> probability_of_1 = [](range_t range) { return range/2; };
+ private:
+  struct estimator { int pos = 1, neg = 1; };
+  std::map<const uint8_t*, estimator> estimators;
 };
 
 
@@ -178,7 +187,7 @@ class compressor {
 
   void run() {
     // Run through all the frames in the file, building the output using our hooks.
-    decoder<compressor> d(this, input_filename);
+    av_decoder<compressor> d(this, input_filename);
     d.dump_stream_info();
     d.decode_video();
 
@@ -200,26 +209,19 @@ class compressor {
     cabac_decoder(compressor *c, CABACContext *ctx_in, const uint8_t *buf, int size) {
       out = c->find_next_coded_block_and_emit_literal(buf, size);
       if (out == nullptr) out = &out_to_ignore;
+      out->set_size(size);
+
       ctx = *ctx_in;
       ctx.coding_hooks = nullptr;
       ctx.coding_hooks_opaque = nullptr;
       ::ff_reset_cabac_decoder(&ctx, buf, size);
-
-#if 1
-      encoder_out.push_back((size >> 24) & 0xFF);
-      encoder_out.push_back((size >> 16) & 0xFF);
-      encoder_out.push_back((size >>  8) & 0xFF);
-      encoder_out.push_back(size & 0xFF);
-#else
-      out->set_cabac(buf, size);
-#endif
     }
     ~cabac_decoder() { assert(out->has_cabac()); }
 
     int get(uint8_t *state) {
       int symbol = ::ff_get_cabac(&ctx, state);
+      encoder.put(symbol, model.probability_of_1);
 #if 1
-      encoder_out.push_back(symbol);
 #else
       auto* e = &estimators[state];
       encoder.put(symbol, [=](uint64_t range){ return (range/(e->pos+e->neg)) * e->pos; });
@@ -231,41 +233,17 @@ class compressor {
 
     int get_bypass() {
       int symbol = ::ff_get_cabac_bypass(&ctx);
-#if 1
-      encoder_out.push_back(symbol);
-#else
-      encoder.put(symbol, [](uint64_t range){ return range/2; });
-#endif
+      encoder.put(symbol, model.probability_of_1);
       return symbol;
     }
 
     int get_terminate() {
       int n = ::ff_get_cabac_terminate(&ctx);
-#if 1
-      encoder_out.push_back(n != 0);
+      encoder.put(n != 0, model.probability_of_1);
       if (n != 0) {
-        encoder_out.resize(4 + ((encoder_out.size()-4)/8)*8 + 1);
-        std::string encoded(4 + (encoder_out.size()-4)/8 + 1, '\x00');
-        encoded[0] = encoder_out[0];
-        encoded[1] = encoder_out[1];
-        encoded[2] = encoder_out[2];
-        encoded[3] = encoder_out[3];
-        for (int i = 4; i < encoded.size(); i++) {
-          uint8_t byte = 0;
-          for (int j = 0; j < 8; j++) {
-            byte |= (encoder_out[4+(i-4)*8+j] != 0 ? 1 : 0) << j;
-          }
-          encoded[i] = byte;
-        }
-        out->set_cabac(encoded);
-      }
-#else
-      encoder.put(n != 0, [](uint64_t range){ return range/100; });
-      if (n) {
         encoder.finish();
-        std::cout << "ratio: " << encoder_out.size() * 1.0 / out->cabac().size() << std::endl;
+        out->set_cabac(&encoder_out[0], encoder_out.size());
       }
-#endif
       return n;
     }
 
@@ -274,8 +252,7 @@ class compressor {
     Recoded::Block out_to_ignore;
     CABACContext ctx;
 
-    struct estimator { int pos = 1, neg = 1; };
-    std::map<const uint8_t*, estimator> estimators;
+    model model;
     std::vector<uint8_t> encoder_out;
     recoded_code::encoder<std::back_insert_iterator<std::vector<uint8_t>>, uint8_t> encoder{
       std::back_inserter(encoder_out)};
@@ -294,7 +271,9 @@ class compressor {
     } else {
       // Can't recode this block, probably because it was NAL-escaped. Place
       // a skip marker in the block list.
-      out.add_block()->set_skip_coded(size);
+      Recoded::Block* block = out.add_block();
+      block->set_skip_coded(true);
+      block->set_size(size);
       return nullptr;  // Tell the recoder to ignore this block.
     }
   }
@@ -339,7 +318,7 @@ class decompressor {
     blocks.clear();
     blocks.resize(in.block_size());
 
-    decoder<decompressor> d(this, input_filename);
+    av_decoder<decompressor> d(this, input_filename);
     d.decode_video();
 
     for (const auto& block : blocks) {
@@ -366,14 +345,11 @@ class decompressor {
           blocks[read_index].coded = true;
           blocks[read_index].surrogate_marker = next_surrogate_marker();
           blocks[read_index].done = false;
-#if 1
-          const uint8_t* cabac = reinterpret_cast<const uint8_t*>(block.cabac().data());
-          int size = (int(cabac[0]) << 24) | (int(cabac[1]) << 16) | (int(cabac[2]) << 8) | int(cabac[3]);
-          read_block = make_surrogate_block(blocks[read_index].surrogate_marker, size);
-#else
-          read_block = make_surrogate_block(blocks[read_index].surrogate_marker, block.cabac().size());
-#endif
-        } else if (block.has_skip_coded()) {
+          if (!block.has_size()) {
+            throw std::runtime_error("CABAC block requires size field.");
+          }
+          read_block = make_surrogate_block(blocks[read_index].surrogate_marker, block.size());
+        } else if (block.has_skip_coded() && block.skip_coded()) {
           // Non-re-coded CABAC coded block. The bytes of this block are
           // emitted in a literal block following this one. This block is
           // a flag to expect a cabac_decoder without a surrogate marker.
@@ -400,22 +376,15 @@ class decompressor {
 
   class cabac_decoder {
    public:
-    cabac_decoder(decompressor *d, CABACContext *ctx_in, const uint8_t *buf, int size) {
-      int index = d->recognize_coded_block(buf, size);
-      block = &d->in.block(index);
-      out = &d->blocks[index];
-      if (block->has_cabac()) {
-#if 1
-        symbol_offset = 32;
-#else
-        ctx = *ctx_in;
-        ctx.coding_hooks = nullptr;
-        ctx.coding_hooks_opaque = nullptr;
-
-        block->cabac().copy(reinterpret_cast<char*>(const_cast<uint8_t*>(buf)), size);
-        ::ff_reset_cabac_decoder(&ctx, buf, size);
-#endif
-      } else if (block->has_skip_coded()) {
+    cabac_decoder(decompressor *d, CABACContext *ctx_in, const uint8_t *buf, int size)
+      : index(d->recognize_coded_block(buf, size)),
+        block(d->in.block(index)),
+        out(&d->blocks[index]),
+        decoder(reinterpret_cast<const uint8_t*>(block.cabac().data()),
+                reinterpret_cast<const uint8_t*>(block.cabac().data()) + block.cabac().size()) {
+      if (block.has_cabac()) {
+        // TODO(ctl): initialize decoder here?
+      } else if (block.has_skip_coded()) {
         // We're skipping this block, so disable calls to our hooks.
         ctx_in->coding_hooks = nullptr;
         ctx_in->coding_hooks_opaque = nullptr;
@@ -427,50 +396,24 @@ class decompressor {
     ~cabac_decoder() { assert(out->done); }
 
     int get(uint8_t *state) {
-#if 1
-      int symbol = ((uint8_t)block->cabac()[symbol_offset/8] & (1 << (symbol_offset % 8))) != 0;
-      symbol_offset++;
+      int symbol = decoder.get(model.probability_of_1);
       cabac_encoder.put(symbol, state);
-#else
-      uint8_t encoder_state = *state;
-      int symbol = ::ff_get_cabac(&ctx, state);
-      cabac_encoder.put(symbol, &encoder_state);
-      if (*state != encoder_state) {
-        throw std::runtime_error("encoder/decoder state transition mismatch");
-      }
-#endif
       return symbol;
     }
 
     int get_bypass() {
-#if 1
-      int symbol = ((uint8_t)block->cabac()[symbol_offset/8] & (1 << (symbol_offset % 8))) != 0;
-      symbol_offset++;
+      int symbol = decoder.get(model.probability_of_1);
       cabac_encoder.put_bypass(symbol);
-#else
-      int symbol = ::ff_get_cabac_bypass(&ctx);
-      cabac_encoder.put_bypass(symbol);
-#endif
       return symbol;
     }
 
     int get_terminate() {
-#if 1
-      int symbol = ((uint8_t)block->cabac()[symbol_offset/8] & (1 << (symbol_offset % 8))) != 0;
-      symbol_offset++;
+      int symbol = decoder.get(model.probability_of_1);
       cabac_encoder.put_terminate(symbol);
       if (symbol) {
         finish();
       }
       return symbol;
-#else
-      int n = ::ff_get_cabac_terminate(&ctx);
-      cabac_encoder.put_terminate(n != 0);
-      if (n != 0) {
-        finish();
-      }
-      return n;
-#endif
     }
 
    private:
@@ -480,37 +423,20 @@ class decompressor {
         cabac_out.pop_back();
       }
       out->out_bytes.assign(reinterpret_cast<const char*>(cabac_out.data()), cabac_out.size());
-#if 1
       out->done = true;
-#else
-      if (out->out_bytes != block->cabac()) {
-        if (out->out_bytes.size() != block->cabac().size()) {
-          std::cout << "cabac block mismatch, sizes: " << out->out_bytes.size() << " " << block->cabac().size() << std::endl;
-        }
-        for (int i = 0; i < out->out_bytes.size(); i++) {
-          if (out->out_bytes[i] != block->cabac()[i]) {
-            std::cout << "cabac block mismatch at byte: " << i << " " << int(uint8_t(out->out_bytes[i])) << "!=" << int(uint8_t(block->cabac()[i])) << " " << int(uint8_t(out->out_bytes[i+1])) << "!=" << int(uint8_t(block->cabac()[i+1])) << std::endl;
-            break;
-          }
-        }
-      }
-      out->done = true;
-      out->out_bytes = block->cabac();
-#endif
     }
 
-    const Recoded::Block *block;
-#if 1
-    int symbol_offset;
-#endif
+    int index;
+    const Recoded::Block& block;
     block_state *out = nullptr;
+
+    model model;
+    // TODO(ctl) Use something nicer than bare pointers as iterators.
+    recoded_code::decoder<const uint8_t*, uint8_t> decoder;
+
     std::vector<uint8_t> cabac_out;
     cabac::encoder<std::back_insert_iterator<std::vector<uint8_t>>> cabac_encoder{
       std::back_inserter(cabac_out)};
-#if 1
-#else
-    CABACContext ctx;
-#endif
   };
 
  private:
@@ -545,19 +471,16 @@ class decompressor {
     // Validate the decoder init call against the coded block's size and surrogate marker.
     const Recoded::Block& block = in.block(index);
     if (block.has_cabac()) {
-#if 1
-#else
-      if (block.cabac().size() != size) {
+      if (block.size() != size) {
         throw std::runtime_error("Invalid surrogate block size.");
       }
-#endif
       std::string buf_header(reinterpret_cast<const char*>(buf),
           blocks[index].surrogate_marker.size());
       if (blocks[index].surrogate_marker != buf_header) {
         throw std::runtime_error("Invalid surrogate marker in coded block.");
       }
     } else if (block.has_skip_coded()) {
-      if (block.skip_coded() != size) {
+      if (block.size() != size) {
         throw std::runtime_error("Invalid skip_coded block size.");
       }
     } else {
