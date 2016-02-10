@@ -55,7 +55,7 @@ class av_decoder {
  public:
   av_decoder(Driver *driver, const std::string& input_filename) : driver(driver) {
     const size_t avio_ctx_buffer_size = 1024*1024;
-    uint8_t *avio_ctx_buffer = static_cast<uint8_t*>(av_malloc(avio_ctx_buffer_size));
+    uint8_t *avio_ctx_buffer = static_cast<uint8_t*>( av_malloc(avio_ctx_buffer_size) );
 
     format_ctx = avformat_alloc_context();
     if (avio_ctx_buffer == nullptr || format_ctx == nullptr) throw std::bad_alloc();
@@ -159,16 +159,42 @@ class av_decoder {
 
 
 // Encoder / decoder for recoded CABAC blocks.
-typedef uint32_t range_t;
+typedef uint64_t range_t;
 typedef arithmetic_code<range_t, uint8_t> recoded_code;
 
 class model {
  public:
-//  range_t probability_of_1(range_t range) { return range/2; }
-  std::function<range_t(range_t)> probability_of_1 = [](range_t range) { return range/2; };
+  model() { reset(); }
+
+  void reset() {
+    estimators.clear();
+    estimators[&terminate_context].neg = 0x180 / 2;
+  }
+
+  range_t probability_for_state(range_t range, const void *context) {
+    auto* e = &estimators[context];
+    int total = e->pos + e->neg;
+    return (range/total) * e->pos;
+  }
+
+  void update_state(int symbol, const void *context) {
+    auto* e = &estimators[context];
+    if (symbol) {
+      e->pos++;
+    } else {
+      e->neg++;
+    }
+    if (e->pos + e->neg > 0x60) {
+      e->pos = (e->pos + 1) / 2;
+      e->neg = (e->neg + 1) / 2;
+    }
+  }
+
+  const uint8_t bypass_context = 0, terminate_context = 0;
+
  private:
   struct estimator { int pos = 1, neg = 1; };
-  std::map<const uint8_t*, estimator> estimators;
+  std::map<const void*, estimator> estimators;
 };
 
 
@@ -208,51 +234,60 @@ class compressor {
    public:
     cabac_decoder(compressor *c, CABACContext *ctx_in, const uint8_t *buf, int size) {
       out = c->find_next_coded_block_and_emit_literal(buf, size);
-      if (out == nullptr) out = &out_to_ignore;
+      if (out == nullptr) {
+        // We're skipping this block, so disable calls to our hooks.
+        ctx_in->coding_hooks = nullptr;
+        ctx_in->coding_hooks_opaque = nullptr;
+        ::ff_reset_cabac_decoder(ctx_in, buf, size);
+        return;
+      }
+
       out->set_size(size);
 
       ctx = *ctx_in;
       ctx.coding_hooks = nullptr;
       ctx.coding_hooks_opaque = nullptr;
       ::ff_reset_cabac_decoder(&ctx, buf, size);
+
+      model = &c->model;
+      model->reset();
     }
-    ~cabac_decoder() { assert(out->has_cabac()); }
+    ~cabac_decoder() { assert(out == nullptr || out->has_cabac()); }
 
     int get(uint8_t *state) {
       int symbol = ::ff_get_cabac(&ctx, state);
-      encoder.put(symbol, model.probability_of_1);
-#if 1
-#else
-      auto* e = &estimators[state];
-      encoder.put(symbol, [=](uint64_t range){ return (range/(e->pos+e->neg)) * e->pos; });
-      if (symbol) { e->pos++; } else { e->neg++; }
-      if (e->pos + e->neg > 0x60) { e->pos /= 2; e->pos++; e->neg /= 2; e->neg++; }
-#endif
+      encoder.put(symbol, [&](range_t range){
+          return model->probability_for_state(range, state); });
+      model->update_state(symbol, state);
       return symbol;
     }
 
     int get_bypass() {
       int symbol = ::ff_get_cabac_bypass(&ctx);
-      encoder.put(symbol, model.probability_of_1);
+      encoder.put(symbol, [&](range_t range){
+          return model->probability_for_state(range, &model->bypass_context); });
+      model->update_state(symbol, &model->bypass_context);
       return symbol;
     }
 
     int get_terminate() {
       int n = ::ff_get_cabac_terminate(&ctx);
-      encoder.put(n != 0, model.probability_of_1);
-      if (n != 0) {
+      int symbol = (n != 0);
+      encoder.put(symbol, [&](range_t range){
+          return model->probability_for_state(range, &model->terminate_context); });
+      model->update_state(symbol, &model->terminate_context);
+      if (symbol) {
         encoder.finish();
         out->set_cabac(&encoder_out[0], encoder_out.size());
       }
-      return n;
+      return symbol;
     }
 
    private:
     Recoded::Block *out;
-    Recoded::Block out_to_ignore;
     CABACContext ctx;
 
-    model model;
+    model *model;
     std::vector<uint8_t> encoder_out;
     recoded_code::encoder<std::back_insert_iterator<std::vector<uint8_t>>, uint8_t> encoder{
       std::back_inserter(encoder_out)};
@@ -286,6 +321,7 @@ class compressor {
   int read_offset = 0;
   int prev_coded_block_end = 0;
 
+  model model;
   Recoded out;
 };
 
@@ -376,15 +412,16 @@ class decompressor {
 
   class cabac_decoder {
    public:
-    cabac_decoder(decompressor *d, CABACContext *ctx_in, const uint8_t *buf, int size)
-      : index(d->recognize_coded_block(buf, size)),
-        block(d->in.block(index)),
-        out(&d->blocks[index]),
-        decoder(reinterpret_cast<const uint8_t*>(block.cabac().data()),
-                reinterpret_cast<const uint8_t*>(block.cabac().data()) + block.cabac().size()) {
-      if (block.has_cabac()) {
-        // TODO(ctl): initialize decoder here?
-      } else if (block.has_skip_coded()) {
+    cabac_decoder(decompressor *d, CABACContext *ctx_in, const uint8_t *buf, int size) {
+      index = d->recognize_coded_block(buf, size);
+      block = &d->in.block(index);
+      out = &d->blocks[index];
+      if (block->has_cabac()) {
+        model = &d->model;
+        model->reset();
+        decoder = std::make_unique<recoded_code::decoder<const char*, uint8_t>>(
+            block->cabac().data(), block->cabac().data() + block->cabac().size());
+      } else if (block->has_skip_coded() && block->skip_coded()) {
         // We're skipping this block, so disable calls to our hooks.
         ctx_in->coding_hooks = nullptr;
         ctx_in->coding_hooks_opaque = nullptr;
@@ -396,19 +433,25 @@ class decompressor {
     ~cabac_decoder() { assert(out->done); }
 
     int get(uint8_t *state) {
-      int symbol = decoder.get(model.probability_of_1);
+      int symbol = decoder->get([&](range_t range){
+          return model->probability_for_state(range, state); });
+      model->update_state(symbol, state);
       cabac_encoder.put(symbol, state);
       return symbol;
     }
 
     int get_bypass() {
-      int symbol = decoder.get(model.probability_of_1);
+      int symbol = decoder->get([&](range_t range){
+          return model->probability_for_state(range, &model->bypass_context); });
+      model->update_state(symbol, &model->bypass_context);
       cabac_encoder.put_bypass(symbol);
       return symbol;
     }
 
     int get_terminate() {
-      int symbol = decoder.get(model.probability_of_1);
+      int symbol = decoder->get([&](range_t range){
+          return model->probability_for_state(range, &model->terminate_context); });
+      model->update_state(symbol, &model->terminate_context);
       cabac_encoder.put_terminate(symbol);
       if (symbol) {
         finish();
@@ -427,12 +470,11 @@ class decompressor {
     }
 
     int index;
-    const Recoded::Block& block;
+    const Recoded::Block *block;
     block_state *out = nullptr;
 
-    model model;
-    // TODO(ctl) Use something nicer than bare pointers as iterators.
-    recoded_code::decoder<const uint8_t*, uint8_t> decoder;
+    model *model;
+    std::unique_ptr<recoded_code::decoder<const char*, uint8_t>> decoder;
 
     std::vector<uint8_t> cabac_out;
     cabac::encoder<std::back_insert_iterator<std::vector<uint8_t>>> cabac_encoder{
@@ -503,6 +545,8 @@ class decompressor {
   // Head of the coded block queue - blocks that have been produced by
   // read_packet but not yet decoded. Tail of the queue is read_index.
   int next_coded_block = 0;
+
+  model model;
 };
 
 

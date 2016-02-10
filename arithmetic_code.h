@@ -198,16 +198,7 @@ struct arithmetic_code {
   // The decoder object takes an input iterator (e.g. from vector or istream)
   // to read compressed digits.
   // In addition to uncompressed data and compressed digits, the intermediate state is:
-  // XXX FIXME
-  //   Maximum R (any positive number, typically 2^k)
-  //   Lower and upper bounds x,y \in [0,R)
-  //   Range r = y-x \in [0,R)
-  // Representation invariant:
-  //   C = \sum_{k=1}^{K_i} c_k M^{-k} + (x_i + r_i C_i) M^{-K_i}/R_i
-  //   Base case: K_1 = 0, x_1 = 0, r_1 = R_1
-  // In the base case i=1, K_1=0: C=C_1 is represented as a series of future decisions b_i.
-  // In the final case i=n, K_n=K: C is represented as a string of compressed digits.
-  // The various encoding methods modify K, x, r, R while keeping C fixed.
+  //   TODO(ctl) document the state, representation invariant, and decoding transitions.
   template <typename InputIterator,
             typename InputDigit = typename std::iterator_traits<InputIterator>::value_type>
   class decoder {
@@ -285,7 +276,7 @@ struct arithmetic_code {
       for (int i = sizeof(CompressedDigit)-sizeof(InputDigit); i >= 0; i -= sizeof(InputDigit)) {
         digit *= digit_base_for<InputDigit>();
         if (in != end) {
-          digit |= CompressedDigit(*in++);
+          digit |= CompressedDigit(InputDigit(*in++));
         }
       }
       return digit;
