@@ -13,6 +13,7 @@ extern "C" {
 #include "libavcodec/coding_hooks.h"
 #include "libavformat/avformat.h"
 #include "libavformat/avio.h"
+#include "libavutil/error.h"
 #include "libavutil/file.h"
 }
 
@@ -50,6 +51,16 @@ struct defer {
 };
 
 
+bool av_check(int return_value, int expected_error = 0, const std::string& message = "") {
+  if (return_value == 0) return false;
+  if (return_value == expected_error) return true;
+  throw std::runtime_error(message + ": " + av_err2str(return_value));
+}
+bool av_check(int return_value, const std::string& message = "") {
+  return av_check(return_value, 0, message);
+}
+
+
 // Sets up a libavcodec decoder with I/O and decoding hooks.
 template <typename Driver>
 class av_decoder {
@@ -70,7 +81,7 @@ class av_decoder {
         nullptr);                             // seek()
 
     if (avformat_open_input(&format_ctx, input_filename.c_str(), nullptr, nullptr) < 0) {
-      throw std::invalid_argument("Failed to initialie decoding context: " + input_filename);
+      throw std::invalid_argument("Failed to initialize decoding context: " + input_filename);
     }
   }
   ~av_decoder() {
@@ -85,9 +96,8 @@ class av_decoder {
   // Read enough frames to display stream diagnostics. Only used by compressor,
   // because hooks are not yet set. Reads from already in-memory blocks.
   void dump_stream_info() {
-    if (avformat_find_stream_info(format_ctx, nullptr) < 0) {
-      throw std::runtime_error("Invalid input stream information.\n");
-    }
+    av_check( avformat_find_stream_info(format_ctx, nullptr),
+        "Invalid input stream information" );
     av_dump_format(format_ctx, 0, format_ctx->filename, 0);
   }
 
@@ -95,21 +105,20 @@ class av_decoder {
   void decode_video() {
     auto frame = av_unique_ptr(av_frame_alloc(), av_frame_free);
     AVPacket packet;
-    while (av_read_frame(format_ctx, &packet) == 0) {
+    // TODO(ctl) add better diagnostics to error results.
+    while (!av_check( av_read_frame(format_ctx, &packet), AVERROR_EOF, "Failed to read frame" )) {
       AVCodecContext *codec = format_ctx->streams[packet.stream_index]->codec;
       if (codec->codec_type == AVMEDIA_TYPE_VIDEO) {
         if (!avcodec_is_open(codec)) {
           codec->thread_count = 1;
           codec->coding_hooks = &coding_hooks;
-          if (avcodec_open2(codec, avcodec_find_decoder(codec->codec_id), nullptr) < 0) {
-            throw std::runtime_error("Failed to open decoder for stream " + std::to_string(packet.stream_index));
-          }
+          av_check( avcodec_open2(codec, avcodec_find_decoder(codec->codec_id), nullptr),
+            "Failed to open decoder for stream " + std::to_string(packet.stream_index) );
         }
 
         int got_frame = 0;
-        if (avcodec_decode_video2(codec, frame.get(), &got_frame, &packet) < 0) {
-          throw std::runtime_error("Failed to decode video frame.");
-        }
+        av_check( avcodec_decode_video2(codec, frame.get(), &got_frame, &packet),
+            "Failed to decode video frame" );
       }
       av_packet_unref(&packet);
     }
