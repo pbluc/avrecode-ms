@@ -163,9 +163,9 @@ class av_decoder {
 typedef uint64_t range_t;
 typedef arithmetic_code<range_t, uint8_t> recoded_code;
 
-class model {
+class h264_model {
  public:
-  model() { reset(); }
+  h264_model() { reset(); }
 
   void reset() {
     estimators.clear();
@@ -288,7 +288,7 @@ class compressor {
     Recoded::Block *out;
     CABACContext ctx;
 
-    model *model;
+    h264_model *model;
     std::vector<uint8_t> encoder_out;
     recoded_code::encoder<std::back_insert_iterator<std::vector<uint8_t>>, uint8_t> encoder{
       std::back_inserter(encoder_out)};
@@ -322,7 +322,7 @@ class compressor {
   int read_offset = 0;
   int prev_coded_block_end = 0;
 
-  model model;
+  h264_model model;
   Recoded out;
 };
 
@@ -474,7 +474,7 @@ class decompressor {
     const Recoded::Block *block;
     block_state *out = nullptr;
 
-    model *model;
+    h264_model *model;
     std::unique_ptr<recoded_code::decoder<const char*, uint8_t>> decoder;
 
     std::vector<uint8_t> cabac_out;
@@ -547,7 +547,7 @@ class decompressor {
   // read_packet but not yet decoded. Tail of the queue is read_index.
   int next_coded_block = 0;
 
-  model model;
+  h264_model model;
 };
 
 
