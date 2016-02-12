@@ -51,10 +51,12 @@ struct defer {
 };
 
 
-bool av_check(int return_value, int expected_error = 0, const std::string& message = "") {
-  if (return_value == 0) return false;
-  if (return_value == expected_error) return true;
-  throw std::runtime_error(message + ": " + av_err2str(return_value));
+int av_check(int return_value, int expected_error = 0, const std::string& message = "") {
+  if (return_value >= 0 || return_value == expected_error) {
+    return return_value;
+  } else {
+    throw std::runtime_error(message + ": " + av_err2str(return_value));
+  }
 }
 bool av_check(int return_value, const std::string& message = "") {
   return av_check(return_value, 0, message);
