@@ -21,8 +21,8 @@ avrecode consists of a compression/decompression program and a fork of the
 libavcodec library, part of the ffmpeg project. These live in separate github
 repositories:
 
-https://github.com/dropbox/avrecode
-https://github.com/dropbox/libavcodec-hooks
+- https://github.com/dropbox/avrecode
+- https://github.com/dropbox/libavcodec-hooks
 
 The avrecode repository imports the libavcodec-hooks repository as a submodule,
 so the `git submodule` command is used to keep them in sync.
