@@ -38,8 +38,10 @@ git submodule update --init
 Build and test:
 
 ```
+brew install protobuf
 cd ffmpeg
-make libavcodec/libavcodec.a
+./configure
+make
 cd ..
 make
 ./recode roundtrip data/GOPR4542.MP4
