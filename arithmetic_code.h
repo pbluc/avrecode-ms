@@ -45,9 +45,8 @@ struct arithmetic_code {
     static_assert(!std::numeric_limits<Digit>::is_signed, "unsigned integer types only");
     static_assert(sizeof(FixedPoint) > sizeof(Digit), "digit must be smaller than fixed point");
     static_assert(sizeof(FixedPoint) % sizeof(Digit) == 0, "digit must divide fixed point evenly");
-    constexpr FixedPoint base = FixedPoint(std::numeric_limits<Digit>::max()) + 1;
-    static_assert(is_power_of_2(base), "expected power of 2");
-    return base;
+    static_assert(is_power_of_2(FixedPoint(std::numeric_limits<Digit>::max()) + 1), "expected power of 2");
+    return FixedPoint(std::numeric_limits<Digit>::max()) + 1;
   }
 
  public:

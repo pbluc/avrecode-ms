@@ -12,7 +12,7 @@ LDLIBS = -L./ffmpeg/libavdevice -lavdevice \
 	 -L./ffmpeg/libavutil -lavutil \
 	 $(EXTRALIBS) \
 	 $(shell pkg-config --libs protobuf) \
-	 -lc++
+	 -lstdc++
 
 recode: recode.o recode.pb.o ffmpeg/libavcodec/libavcodec.a
 

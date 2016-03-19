@@ -55,7 +55,9 @@ int av_check(int return_value, int expected_error = 0, const std::string& messag
   if (return_value >= 0 || return_value == expected_error) {
     return return_value;
   } else {
-    throw std::runtime_error(message + ": " + av_err2str(return_value));
+    char err[AV_ERROR_MAX_STRING_SIZE];
+    av_make_error_string(err, AV_ERROR_MAX_STRING_SIZE, return_value);
+    throw std::runtime_error(message + ": " + err);
   }
 }
 bool av_check(int return_value, const std::string& message = "") {
@@ -87,7 +89,7 @@ class av_decoder {
     }
   }
   ~av_decoder() {
-    for (int i = 0; i < format_ctx->nb_streams; i++) {
+    for (size_t i = 0; i < format_ctx->nb_streams; i++) {
       avcodec_close(format_ctx->streams[i]->codec);
     }
     av_freep(&format_ctx->pb->buffer);  // May no longer be the same buffer we initially malloced.
@@ -407,13 +409,13 @@ class decompressor {
           throw std::runtime_error("Unknown input block type");
         }
       }
-      if (read_offset < read_block.size()) {
+      if ((size_t)read_offset < read_block.size()) {
         int n = read_block.copy(reinterpret_cast<char*>(p), size, read_offset);
         read_offset += n;
         p += n;
         size -= n;
       }
-      if (read_offset >= read_block.size()) {
+      if ((size_t)read_offset >= read_block.size()) {
         read_block.clear();
         read_offset = 0;
         read_index++;
@@ -498,7 +500,7 @@ class decompressor {
   std::string next_surrogate_marker() {
     uint64_t n = surrogate_marker_sequence_number++;
     std::string surrogate_marker(SURROGATE_MARKER_BYTES, '\x01');
-    for (int i = 0; i < surrogate_marker.size(); i++) {
+    for (int i = 0; i < (int)surrogate_marker.size(); i++) {
       surrogate_marker[i] = (n % 255) + 1;
       n /= 255;
     }
