@@ -115,7 +115,7 @@ class av_decoder {
       if (codec->codec_type == AVMEDIA_TYPE_VIDEO) {
         if (!avcodec_is_open(codec)) {
           codec->thread_count = 1;
-          codec->coding_hooks = &coding_hooks;
+          codec->hooks = &hooks;
           av_check( avcodec_open2(codec, avcodec_find_decoder(codec->codec_id), nullptr),
             "Failed to open decoder for stream " + std::to_string(packet.stream_index) );
         }
@@ -157,15 +157,24 @@ class av_decoder {
       throw std::runtime_error("Not implemented: CABAC decoder doesn't use skip_bytes.");
     }
   };
-
+  struct model_hooks {
+    static void frame_size(void *opaque, int mb_width, int mb_height) {
+      auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
+      fprintf(stderr, "%p\n", self);
+      throw std::runtime_error("Not implemented: Model hooks.");
+    }
+  };
   Driver *driver;
   AVFormatContext *format_ctx;
-  AVCodecCodingHooks coding_hooks = { this, {
+  AVCodecHooks hooks = { this, {
       cabac::init_decoder,
       cabac::get,
       cabac::get_bypass,
       cabac::get_terminate,
       cabac::skip_bytes,
+    },
+    {
+      model_hooks::frame_size,
     },
   };
   std::map<CABACContext*, std::unique_ptr<typename Driver::cabac_decoder>> cabac_contexts;
@@ -296,7 +305,6 @@ class compressor {
       }
       return symbol;
     }
-
    private:
     Recoded::Block *out;
     CABACContext ctx;
@@ -306,6 +314,9 @@ class compressor {
     recoded_code::encoder<std::back_insert_iterator<std::vector<uint8_t>>, uint8_t> encoder{
       std::back_inserter(encoder_out)};
   };
+  h264_model *get_model() {
+    return &model;
+  }
 
  private:
   Recoded::Block* find_next_coded_block_and_emit_literal(const uint8_t *buf, int size) {
@@ -494,6 +505,9 @@ class decompressor {
     cabac::encoder<std::back_insert_iterator<std::vector<uint8_t>>> cabac_encoder{
       std::back_inserter(cabac_out)};
   };
+  h264_model *get_model() {
+    return &model;
+  }
 
  private:
   // Return a unique 8-byte string containing no zero bytes (NAL-encoding-safe).
