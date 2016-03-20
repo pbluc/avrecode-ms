@@ -158,10 +158,41 @@ class av_decoder {
     }
   };
   struct model_hooks {
-    static void frame_size(void *opaque, int mb_width, int mb_height) {
+    static void frame_spec(void *opaque, int frame_num, int mb_width, int mb_height) {
       auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
-      fprintf(stderr, "%p\n", self);
-      throw std::runtime_error("Not implemented: Model hooks.");
+      self->frame_num = frame_num;
+      self->mb_width = mb_width;
+      self->mb_height = mb_height;
+    }
+    static void mb_xy(void *opaque, int x, int y) {
+      auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
+      self->mb_x = x;
+      self->mb_y = y;
+    }
+    static void begin_sub_mb(void *opaque, int cat, int scan8index, int max_coeff, int is_dc, int chroma422) {
+      auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
+      self->sub_mb_cat = cat;
+      self->sub_mb_index = scan8index;
+      self->sub_mb_size = max_coeff;
+      self->sub_mb_is_dc = is_dc;
+      self->sub_mb_chroma422 = chroma422;
+    }
+    static void end_sub_mb(void *opaque, int cat, int scan8index, int max_coeff, int is_dc, int chroma422) {
+      auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
+      assert(self->sub_mb_cat == cat);
+      assert(self->sub_mb_index == scan8index);
+      assert(self->sub_mb_size == max_coeff);
+      assert(self->sub_mb_is_dc == is_dc);
+      assert(self->sub_mb_chroma422 == chroma422);
+      self->sub_mb_cat = -1;
+      self->sub_mb_index = -1;
+      self->sub_mb_size = -1;
+      self->sub_mb_is_dc = 0;
+      self->sub_mb_chroma422 = 0;
+    }
+    static void begin_coding_type(void *opaque, CodingType ct, int param0, int param1, int param2) {
+    }
+    static void end_coding_type(void *opaque, CodingType ct) {
     }
   };
   Driver *driver;
@@ -174,7 +205,13 @@ class av_decoder {
       cabac::skip_bytes,
     },
     {
-      model_hooks::frame_size,
+      model_hooks::frame_spec,
+      model_hooks::mb_xy,
+      model_hooks::begin_sub_mb,
+      model_hooks::end_sub_mb,
+      model_hooks::begin_coding_type,
+      model_hooks::end_coding_type,
+
     },
   };
   std::map<CABACContext*, std::unique_ptr<typename Driver::cabac_decoder>> cabac_contexts;
@@ -214,7 +251,16 @@ class h264_model {
   }
 
   const uint8_t bypass_context = 0, terminate_context = 0;
-
+  int mb_width = 0;
+  int mb_height = 0;
+  int frame_num = 0;
+  int mb_x = 0;
+  int mb_y = 0;
+  int sub_mb_index = -1;
+  int sub_mb_cat = -1;
+  int sub_mb_size = -1;
+  int sub_mb_is_dc = 0;
+  int sub_mb_chroma422 = 0;
  private:
   struct estimator { int pos = 1, neg = 1; };
   std::map<const void*, estimator> estimators;
