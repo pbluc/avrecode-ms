@@ -20,7 +20,7 @@ extern "C" {
 #include "arithmetic_code.h"
 #include "cabac_code.h"
 #include "recode.pb.h"
-
+#include "framebuffer.h"
 
 // CABAC blocks smaller than this will be skipped.
 const int SURROGATE_MARKER_BYTES = 8;
@@ -160,9 +160,7 @@ class av_decoder {
   struct model_hooks {
     static void frame_spec(void *opaque, int frame_num, int mb_width, int mb_height) {
       auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
-      self->frame_num = frame_num;
-      self->mb_width = mb_width;
-      self->mb_height = mb_height;
+      self->update_frame_spec(frame_num, mb_width, mb_height);
     }
     static void mb_xy(void *opaque, int x, int y) {
       auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
@@ -223,6 +221,8 @@ typedef uint64_t range_t;
 typedef arithmetic_code<range_t, uint8_t> recoded_code;
 
 class h264_model {
+  FrameBuffer frames[2];
+  int cur_frame = 0;
  public:
   h264_model() { reset(); }
 
@@ -236,7 +236,22 @@ class h264_model {
     int total = e->pos + e->neg;
     return (range/total) * e->pos;
   }
-
+  void update_frame_spec(int frame_num, int mb_width, int mb_height) {
+    if (frames[cur_frame].width() != mb_width
+        || frames[cur_frame].height() != mb_height
+        || !frames[cur_frame].is_same_frame(frame_num)) {
+      cur_frame = !cur_frame;
+      if (frames[cur_frame].width() != mb_width
+          || frames[cur_frame].height() != mb_height) {
+        frames[cur_frame].init(mb_width, mb_height, mb_width * mb_height);
+        //fprintf(stderr, "Init(%d=%d) %d x %d\n", frame_num, cur_frame, mb_width, mb_height);
+      } else {
+        frames[cur_frame].bzero();
+        //fprintf(stderr, "Clear (%d=%d)\n", frame_num, cur_frame);
+      }
+      frames[cur_frame].set_frame_num(frame_num);
+    }
+  }
   void update_state(int symbol, const void *context) {
     auto* e = &estimators[context];
     if (symbol) {
@@ -251,9 +266,6 @@ class h264_model {
   }
 
   const uint8_t bypass_context = 0, terminate_context = 0;
-  int mb_width = 0;
-  int mb_height = 0;
-  int frame_num = 0;
   int mb_x = 0;
   int mb_y = 0;
   int sub_mb_index = -1;
