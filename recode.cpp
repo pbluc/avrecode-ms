@@ -1,3 +1,4 @@
+/* -*-mode:c++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 #include <fstream>
 #include <iostream>
 #include <list>
@@ -188,9 +189,14 @@ class av_decoder {
       self->sub_mb_is_dc = 0;
       self->sub_mb_chroma422 = 0;
     }
-    static void begin_coding_type(void *opaque, CodingType ct, int param0, int param1, int param2) {
+      static void begin_coding_type(void *opaque, CodingType ct,
+                                    int sub_index, int param0, int param1) {
+      auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
+      self->begin_coding_type(ct, sub_index, param0, param1);
     }
     static void end_coding_type(void *opaque, CodingType ct) {
+      auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
+      self->end_coding_type(ct);
     }
   };
   Driver *driver;
@@ -221,6 +227,9 @@ typedef uint64_t range_t;
 typedef arithmetic_code<range_t, uint8_t> recoded_code;
 
 class h264_model {
+  CodingType coding_type = PIP_UNKNOWN;
+  int sub_index = 0;
+  int sub_step = 1;
   FrameBuffer frames[2];
   int cur_frame = 0;
  public:
@@ -252,6 +261,53 @@ class h264_model {
       frames[cur_frame].set_frame_num(frame_num);
     }
   }
+  void end_coding_type(CodingType ct) {
+      if (ct == PIP_SIGNIFICANCE_MAP) {
+          assert(coding_type == PIP_UNREACHABLE);
+      }
+      coding_type = PIP_UNKNOWN;
+  }
+  void begin_coding_type(CodingType ct, int sub_index, int param0, int param1) {
+    coding_type = ct;
+    switch (ct) {
+    case PIP_SIGNIFICANCE_MAP:
+      if (sub_mb_is_dc) {
+        sub_index = 0;
+        sub_step = sub_mb_size;
+      } else {
+        sub_index = 1;
+        sub_step = 1;
+      }
+      break;
+    default:
+      break;
+    }
+  }
+  void update_state_tracking(int symbol) {
+    switch (coding_type) {
+    case PIP_SIGNIFICANCE_MAP:
+      if (symbol) {
+        coding_type = PIP_SIGNIFICANCE_EOB;
+      } else {
+        ++sub_index;
+      }
+      break;
+    case PIP_SIGNIFICANCE_EOB:
+      if (symbol) {
+        sub_index = 0;
+        coding_type = PIP_UNREACHABLE;
+      } else {
+        coding_type = PIP_SIGNIFICANCE_MAP;
+        ++sub_index;
+      }
+      break;
+    case PIP_RESIDUALS:
+    case PIP_UNKNOWN:
+      break;
+    case PIP_UNREACHABLE:
+      assert(false);
+    }
+  }
   void update_state(int symbol, const void *context) {
     auto* e = &estimators[context];
     if (symbol) {
@@ -263,6 +319,7 @@ class h264_model {
       e->pos = (e->pos + 1) / 2;
       e->neg = (e->neg + 1) / 2;
     }
+    update_state_tracking(symbol);
   }
 
   const uint8_t bypass_context = 0, terminate_context = 0;
