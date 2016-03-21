@@ -225,6 +225,7 @@ class av_decoder {
 // Encoder / decoder for recoded CABAC blocks.
 typedef uint64_t range_t;
 typedef arithmetic_code<range_t, uint8_t> recoded_code;
+
 typedef std::tuple<const void*, int, int> model_key;
 class h264_model {
   CodingType coding_type = PIP_UNKNOWN;
@@ -245,16 +246,40 @@ class h264_model {
           return model_key(context, 0, 0);
         case PIP_SIGNIFICANCE_MAP:
           {
+              static const uint8_t sig_coeff_flag_offset_8x8[2][63] = {
+                  { 0, 1, 2, 3, 4, 5, 5, 4, 4, 3, 3, 4, 4, 4, 5, 5,
+                    4, 4, 4, 4, 3, 3, 6, 7, 7, 7, 8, 9,10, 9, 8, 7,
+                    7, 6,11,12,13,11, 6, 7, 8, 9,14,10, 9, 8, 6,11,
+                    12,13,11, 6, 9,14,10, 9,11,12,13,11,14,10,12 },
+                  { 0, 1, 1, 2, 2, 3, 3, 4, 5, 6, 7, 7, 7, 8, 4, 5,
+                    6, 9,10,10, 8,11,12,11, 9, 9,10,10, 8,11,12,11,
+                    9, 9,10,10, 8,11,12,11, 9, 9,10,10, 8,13,13, 9,
+                    9,10,10, 8,13,13, 9, 9,10,10,14,14,14,14,14 }
+              };
+              int cat_lookup[14] = { 105+0, 105+15, 105+29, 105+44, 105+47, 402, 484+0, 484+15, 484+29, 660, 528+0, 528+15, 528+29, 718 };
+              static const uint8_t sig_coeff_offset_dc[7] = { 0, 0, 1, 1, 2, 2, 2 };
+              int zigzag_offset = zigzag_index;
+              if (sub_mb_is_dc && sub_mb_chroma422) {
+                      assert(zigzag_index < 7);
+                  zigzag_offset = sig_coeff_offset_dc[zigzag_index];
+              } else {
+                  if (sub_mb_size > 32) {
+                      assert(zigzag_index < 63);
+                      zigzag_offset = sig_coeff_flag_offset_8x8[0][zigzag_index];
+                  }
+              }
+              assert(sub_mb_cat < (int)(sizeof(cat_lookup)/sizeof(cat_lookup[0])));
+              // FIXME: why doesn't this prior help at all
               //const BlockMeta &meta = frames[!cur_frame].meta_at(mb_x, mb_y);
-              return model_key(context,
-                               frames[!cur_frame].at(mb_x, mb_y).residual[sub_mb_index * 16 + zigzag_index] ? 1 : 0,
-                               0);
-              //return model_key(context, 0, 0);
+              return model_key(&significance_context,
+                               0/*frames[!cur_frame].at(mb_x, mb_y).residual[sub_mb_index * 16 + zigzag_index] ? 1 : 0*/,
+                               sub_mb_is_dc + zigzag_offset * 2 + 16 * 2 * cat_lookup[sub_mb_cat]);
           }
         case PIP_SIGNIFICANCE_EOB:
           {
-            const BlockMeta &meta = frames[!cur_frame].meta_at(mb_x, mb_y);
-            return model_key(context, meta.num_nonzeros[sub_mb_index], 0);
+            // FIXME: why doesn't this prior help at all
+            //const BlockMeta &meta = frames[!cur_frame].meta_at(mb_x, mb_y);
+            return model_key(context, 0/*meta.num_nonzeros[sub_mb_index]*/, 0);//;
           }
       }
       assert(false && "Unreachable");
@@ -367,7 +392,7 @@ class h264_model {
     update_state_tracking(symbol);
   }
 
-  const uint8_t bypass_context = 0, terminate_context = 0;
+  const uint8_t bypass_context = 0, terminate_context = 0, significance_context = 0;
   int mb_x = 0;
   int mb_y = 0;
   int sub_mb_index = -1;
