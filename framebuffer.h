@@ -18,7 +18,7 @@ class FrameBuffer {
     void destroy() {
         if (width_ && height_) {
             free(storage_);
-            free(meta_);
+            free(meta_storage_);
         }
         memset(this, 0, sizeof(*this));
     }

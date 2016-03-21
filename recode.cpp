@@ -225,7 +225,7 @@ class av_decoder {
 // Encoder / decoder for recoded CABAC blocks.
 typedef uint64_t range_t;
 typedef arithmetic_code<range_t, uint8_t> recoded_code;
-
+typedef std::tuple<const void*, int, int> model_key;
 class h264_model {
   CodingType coding_type = PIP_UNKNOWN;
   int zigzag_index = 0;
@@ -236,11 +236,24 @@ class h264_model {
 
   void reset() {
     estimators.clear();
-    estimators[&terminate_context].neg = 0x180 / 2;
+    estimators[get_model_key(&terminate_context)].neg = 0x180 / 2;
   }
-
+  model_key get_model_key(const void *context)const {
+      switch(coding_type) {
+        case PIP_UNKNOWN:
+        case PIP_UNREACHABLE:
+        case PIP_RESIDUALS:
+          return model_key(context, 0, 0);
+        case PIP_SIGNIFICANCE_MAP:
+          return model_key(context, frames[!cur_frame].at(mb_x, mb_y).residual[sub_mb_index * 16 + zigzag_index] ? 1 : 0, 0);
+        case PIP_SIGNIFICANCE_EOB:
+          return model_key(context, frames[!cur_frame].meta_at(mb_x, mb_y).num_nonzeros[sub_mb_index], 0);
+      }
+      assert(false && "Unreachable");
+      abort();
+  }
   range_t probability_for_state(range_t range, const void *context) {
-    auto* e = &estimators[context];
+    auto* e = &estimators[get_model_key(context)];
     int total = e->pos + e->neg;
     return (range/total) * e->pos;
   }
@@ -252,6 +265,10 @@ class h264_model {
       if (frames[cur_frame].width() != (uint32_t)mb_width
           || frames[cur_frame].height() != (uint32_t)mb_height) {
         frames[cur_frame].init(mb_width, mb_height, mb_width * mb_height);
+        if (frames[!cur_frame].width() != (uint32_t)mb_width
+            || frames[!cur_frame].height() != (uint32_t)mb_height) {
+            frames[!cur_frame].init(mb_width, mb_height, mb_width * mb_height);
+        }
         //fprintf(stderr, "Init(%d=%d) %d x %d\n", frame_num, cur_frame, mb_width, mb_height);
       } else {
         frames[cur_frame].bzero();
@@ -328,7 +345,7 @@ class h264_model {
     }
   }
   void update_state(int symbol, const void *context) {
-    auto* e = &estimators[context];
+    auto* e = &estimators[get_model_key(context)];
     if (symbol) {
       e->pos++;
     } else {
@@ -351,7 +368,7 @@ class h264_model {
   int sub_mb_chroma422 = 0;
  private:
   struct estimator { int pos = 1, neg = 1; };
-  std::map<const void*, estimator> estimators;
+  std::map<model_key, estimator> estimators;
 };
 
 
