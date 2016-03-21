@@ -78,5 +78,11 @@ class FrameBuffer {
     const Block& at(uint32_t x, uint32_t y) const{
         return image_[x + y * width_];
     }
+    BlockMeta& meta_at(uint32_t x, uint32_t y) {
+        return meta_[x + y * width_];
+    }
+    const BlockMeta& meta_at(uint32_t x, uint32_t y) const{
+        return meta_[x + y * width_];
+    }
 };
 #endif

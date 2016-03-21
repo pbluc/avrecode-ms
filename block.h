@@ -1,11 +1,13 @@
 #ifndef _BLOCK_H_
 #define _BLOCK_H_
+
 struct Block {
-    int16_t residual[256];
+    uint16_t residual[(3 * (16 + 1)) * 16];
     int16_t mv_x[4][4];
     int16_t mv_y[4][4];
 };
 struct BlockMeta{
+    uint8_t num_nonzeros[(3 * (16 + 1))];
     int32_t rem_pred_mode[16];
     int32_t prev_pred_mode[16];
     uint8_t sub_mb_type[4];

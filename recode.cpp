@@ -190,9 +190,9 @@ class av_decoder {
       self->sub_mb_chroma422 = 0;
     }
       static void begin_coding_type(void *opaque, CodingType ct,
-                                    int sub_index, int param0, int param1) {
+                                    int zigzag_index, int param0, int param1) {
       auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
-      self->begin_coding_type(ct, sub_index, param0, param1);
+      self->begin_coding_type(ct, zigzag_index, param0, param1);
     }
     static void end_coding_type(void *opaque, CodingType ct) {
       auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
@@ -228,8 +228,7 @@ typedef arithmetic_code<range_t, uint8_t> recoded_code;
 
 class h264_model {
   CodingType coding_type = PIP_UNKNOWN;
-  int sub_index = 0;
-  int sub_step = 1;
+  int zigzag_index = 0;
   FrameBuffer frames[2];
   int cur_frame = 0;
  public:
@@ -264,20 +263,27 @@ class h264_model {
   void end_coding_type(CodingType ct) {
       if (ct == PIP_SIGNIFICANCE_MAP) {
         assert(coding_type == PIP_UNREACHABLE
-               || (coding_type == PIP_SIGNIFICANCE_MAP && sub_index == 0));
+               || (coding_type == PIP_SIGNIFICANCE_MAP && zigzag_index == 0));
+        uint8_t num_nonzeros = 0;
+        for (int i = 0; i < sub_mb_size; ++i) {
+            int16_t res = frames[cur_frame].at(mb_x, mb_y).residual[sub_mb_index * 16 + i];
+            assert(res == 1 || res == 0);
+            if (res != 0) {
+                num_nonzeros += 1;
+            }
+        }
+        frames[cur_frame].meta_at(mb_x, mb_y).num_nonzeros[sub_mb_index] = num_nonzeros;
       }
       coding_type = PIP_UNKNOWN;
   }
-  void begin_coding_type(CodingType ct, int sub_index, int param0, int param1) {
+  void begin_coding_type(CodingType ct, int zz_index, int param0, int param1) {
     coding_type = ct;
     switch (ct) {
     case PIP_SIGNIFICANCE_MAP:
       if (sub_mb_is_dc) {
-        sub_index = 0;
-        sub_step = sub_mb_size;
+        zigzag_index = 0;
       } else {
-        sub_index = 1;
-        sub_step = 1;
+        zigzag_index = 0;
       }
       break;
     default:
@@ -287,30 +293,31 @@ class h264_model {
   void update_state_tracking(int symbol) {
     switch (coding_type) {
     case PIP_SIGNIFICANCE_MAP:
-      if (sub_index + 1 == sub_mb_size) {
+      frames[cur_frame].at(mb_x, mb_y).residual[sub_mb_index * 16 + zigzag_index] = symbol;
+      if (zigzag_index + 1 == sub_mb_size) {
         coding_type = PIP_UNREACHABLE;
-        sub_index = 0;
+        zigzag_index = 0;
       } else {
         if (symbol) {
           coding_type = PIP_SIGNIFICANCE_EOB;
         } else {
-          ++sub_index;
-          if (sub_index + 1 == sub_mb_size) {
+          ++zigzag_index;
+          if (zigzag_index + 1 == sub_mb_size) {
               // if we were a zero and we haven't eob'd then the
               // next and last must be a one
               coding_type = PIP_UNREACHABLE;
-              sub_index = 0;
+              zigzag_index = 0;
           }
         }
       }
       break;
     case PIP_SIGNIFICANCE_EOB:
-      if (symbol || sub_index + 2 == sub_mb_size) {
-        sub_index = 0;
+      if (symbol || zigzag_index + 2 == sub_mb_size) {
+        zigzag_index = 0;
         coding_type = PIP_UNREACHABLE;
       } else {
         coding_type = PIP_SIGNIFICANCE_MAP;
-        ++sub_index;
+        ++zigzag_index;
       }
       break;
     case PIP_RESIDUALS:
