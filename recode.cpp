@@ -235,8 +235,7 @@ class h264_model {
   h264_model() { reset(); }
 
   void reset() {
-    estimators.clear();
-    estimators[get_model_key(&terminate_context)].neg = 0x180 / 2;
+      // reset should do nothing as we wish to remember what we've learned
   }
   model_key get_model_key(const void *context)const {
       switch(coding_type) {
@@ -245,9 +244,18 @@ class h264_model {
         case PIP_RESIDUALS:
           return model_key(context, 0, 0);
         case PIP_SIGNIFICANCE_MAP:
-          return model_key(context, frames[!cur_frame].at(mb_x, mb_y).residual[sub_mb_index * 16 + zigzag_index] ? 1 : 0, 0);
+          {
+              //const BlockMeta &meta = frames[!cur_frame].meta_at(mb_x, mb_y);
+              return model_key(context,
+                               frames[!cur_frame].at(mb_x, mb_y).residual[sub_mb_index * 16 + zigzag_index] ? 1 : 0,
+                               0);
+              //return model_key(context, 0, 0);
+          }
         case PIP_SIGNIFICANCE_EOB:
-          return model_key(context, frames[!cur_frame].meta_at(mb_x, mb_y).num_nonzeros[sub_mb_index], 0);
+          {
+            const BlockMeta &meta = frames[!cur_frame].meta_at(mb_x, mb_y);
+            return model_key(context, meta.num_nonzeros[sub_mb_index], 0);
+          }
       }
       assert(false && "Unreachable");
       abort();
@@ -289,6 +297,7 @@ class h264_model {
                 num_nonzeros += 1;
             }
         }
+        assert(frames[cur_frame].meta_at(mb_x, mb_y).num_nonzeros[sub_mb_index] == 0);
         frames[cur_frame].meta_at(mb_x, mb_y).num_nonzeros[sub_mb_index] = num_nonzeros;
       }
       coding_type = PIP_UNKNOWN;
