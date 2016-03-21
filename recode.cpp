@@ -451,7 +451,7 @@ class decompressor {
       if (!block.done) throw std::runtime_error("Not all blocks were decoded.");
       if (block.length_parity != -1) {
         // Correct for x264 padding: replace last byte or add an extra byte.
-        if (block.length_parity != (block.out_bytes.size() & 1)) {
+        if (block.length_parity != (int)(block.out_bytes.size() & 1)) {
           block.out_bytes.insert(block.out_bytes.end(), block.last_byte);
         } else {
           block.out_bytes[block.out_bytes.size() - 1] = block.last_byte;
