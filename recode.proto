@@ -12,6 +12,8 @@ message Recoded {
     optional bytes literal = 2;
     optional bool skip_coded = 3;  // Always true when present.
     optional bytes cabac = 4;
+    optional bool length_parity = 5; // To detect presence of x264 padding.
+    optional bytes last_byte = 6; // Last octet (zero or x264 signature bits)
   };
   repeated Block block = 2;
 };

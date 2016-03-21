@@ -385,7 +385,12 @@ class compressor {
       size_t gap = found - &original_bytes[prev_coded_block_end];
       out.add_block()->set_literal(&original_bytes[prev_coded_block_end], gap);
       prev_coded_block_end += gap + size;
-      return out.add_block();  // Return a block for the recoder to fill.
+      Recoded::Block *newBlock = out.add_block();
+      newBlock->set_length_parity(size & 1);
+      if (size > 1) {
+        newBlock->set_last_byte(&(buf[size - 1]), 1);
+      }
+      return newBlock;  // Return a block for the recoder to fill.
     } else {
       // Can't recode this block, probably because it was NAL-escaped. Place
       // a skip marker in the block list.
@@ -416,6 +421,8 @@ class decompressor {
     std::string surrogate_marker;
     std::string out_bytes;
     bool done = false;
+    int8_t length_parity = -1;
+    uint8_t last_byte;
   };
 
  public:
@@ -440,8 +447,16 @@ class decompressor {
     av_decoder<decompressor> d(this, input_filename);
     d.decode_video();
 
-    for (const auto& block : blocks) {
+    for (auto& block : blocks) {
       if (!block.done) throw std::runtime_error("Not all blocks were decoded.");
+      if (block.length_parity != -1) {
+        // Correct for x264 padding: replace last byte or add an extra byte.
+        if (block.length_parity != (block.out_bytes.size() & 1)) {
+          block.out_bytes.insert(block.out_bytes.end(), block.last_byte);
+        } else {
+          block.out_bytes[block.out_bytes.size() - 1] = block.last_byte;
+        }
+      }
       out_stream << block.out_bytes;
     }
   }
@@ -466,6 +481,11 @@ class decompressor {
           blocks[read_index].done = false;
           if (!block.has_size()) {
             throw std::runtime_error("CABAC block requires size field.");
+          }
+          if (block.has_length_parity() && block.has_last_byte() &&
+              !block.last_byte().empty()) {
+            blocks[read_index].length_parity = block.length_parity();
+            blocks[read_index].last_byte = block.last_byte()[0];
           }
           read_block = make_surrogate_block(blocks[read_index].surrogate_marker, block.size());
         } else if (block.has_skip_coded() && block.skip_coded()) {
