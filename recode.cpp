@@ -246,12 +246,12 @@ class h264_model {
     return (range/total) * e->pos;
   }
   void update_frame_spec(int frame_num, int mb_width, int mb_height) {
-    if (frames[cur_frame].width() != mb_width
-        || frames[cur_frame].height() != mb_height
+    if (frames[cur_frame].width() != (uint32_t)mb_width
+        || frames[cur_frame].height() != (uint32_t)mb_height
         || !frames[cur_frame].is_same_frame(frame_num)) {
       cur_frame = !cur_frame;
-      if (frames[cur_frame].width() != mb_width
-          || frames[cur_frame].height() != mb_height) {
+      if (frames[cur_frame].width() != (uint32_t)mb_width
+          || frames[cur_frame].height() != (uint32_t)mb_height) {
         frames[cur_frame].init(mb_width, mb_height, mb_width * mb_height);
         //fprintf(stderr, "Init(%d=%d) %d x %d\n", frame_num, cur_frame, mb_width, mb_height);
       } else {
@@ -263,7 +263,8 @@ class h264_model {
   }
   void end_coding_type(CodingType ct) {
       if (ct == PIP_SIGNIFICANCE_MAP) {
-          assert(coding_type == PIP_UNREACHABLE);
+        assert(coding_type == PIP_UNREACHABLE
+               || (coding_type == PIP_SIGNIFICANCE_MAP && sub_index == 0));
       }
       coding_type = PIP_UNKNOWN;
   }
@@ -286,14 +287,25 @@ class h264_model {
   void update_state_tracking(int symbol) {
     switch (coding_type) {
     case PIP_SIGNIFICANCE_MAP:
-      if (symbol) {
-        coding_type = PIP_SIGNIFICANCE_EOB;
+      if (sub_index + 1 == sub_mb_size) {
+        coding_type = PIP_UNREACHABLE;
+        sub_index = 0;
       } else {
-        ++sub_index;
+        if (symbol) {
+          coding_type = PIP_SIGNIFICANCE_EOB;
+        } else {
+          ++sub_index;
+          if (sub_index + 1 == sub_mb_size) {
+              // if we were a zero and we haven't eob'd then the
+              // next and last must be a one
+              coding_type = PIP_UNREACHABLE;
+              sub_index = 0;
+          }
+        }
       }
       break;
     case PIP_SIGNIFICANCE_EOB:
-      if (symbol) {
+      if (symbol || sub_index + 2 == sub_mb_size) {
         sub_index = 0;
         coding_type = PIP_UNREACHABLE;
       } else {
