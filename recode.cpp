@@ -302,18 +302,7 @@ constexpr r_scan8 reverse_scan_8[15][8] = {
      {32 + 8, false, false}, {32 + 9, false, false}, {32 + 12, false, false}, {32 + 13, false, false}},
     {{32 + 16 * 3 + 1,false, true}, r_scan8::inv(), r_scan8::inv(), {32 + 15, true, false},
      {32 + 10, false, false}, {32 + 11, false, false}, {32 + 14, false, false}, {32 + 15, false, false}}};
-int test_reverse_scan8() {
-    for (size_t i = 0; i < sizeof(scan_8)/ sizeof(scan_8[0]); ++i) {
-        auto a = reverse_scan_8[scan_8[i] >> 3][scan_8[i] & 7];
-        assert(a.neighbor_left == false && a.neighbor_up == false);
-        assert(a.scan8_index == i);
-        if (a.scan8_index != i) {
-            return 1;
-        }
-    }
-    return 0;
-}
-int make_sure_reverse_scan8 = test_reverse_scan8();
+
 // Encoder / decoder for recoded CABAC blocks.
 typedef uint64_t range_t;
 typedef arithmetic_code<range_t, uint8_t> recoded_code;
@@ -331,6 +320,22 @@ constexpr uint8_t zigzag16[16] = {
     3, 6, 10, 14,
     4, 7, 11, 15
 };
+int test_reverse_scan8() {
+    for (size_t i = 0; i < sizeof(scan_8)/ sizeof(scan_8[0]); ++i) {
+        auto a = reverse_scan_8[scan_8[i] >> 3][scan_8[i] & 7];
+        assert(a.neighbor_left == false && a.neighbor_up == false);
+        assert(a.scan8_index == i);
+        if (a.scan8_index != i) {
+            return 1;
+        }
+    }
+    for (int i = 0;i < 16; ++i) {
+        assert(zigzag16[unzigzag16[i]] == i);
+        assert(unzigzag16[zigzag16[i]] == i);
+    }
+    return 0;
+}
+int make_sure_reverse_scan8 = test_reverse_scan8();
 
 bool get_neighbor(bool above, int sub_mb_size,
                   int mb_x, int mb_y, int scan8_index, int zigzag_index,
@@ -409,6 +414,10 @@ bool get_neighbor(bool above, int sub_mb_size,
         }
     }
     out_scan8_index = neighbor.scan8_index;
+    if (sub_mb_size >= 32) {
+        out_scan8_index /= 4;
+        out_scan8_index *= 4; // round down to the nearest multiple of 4
+    }
     out_zigzag_index = zigzag_index;
     out_mb_x = mb_x;
     out_mb_y = mb_y;
