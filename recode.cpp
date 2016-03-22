@@ -319,6 +319,102 @@ typedef uint64_t range_t;
 typedef arithmetic_code<range_t, uint8_t> recoded_code;
 
 typedef std::tuple<const void*, int, int> model_key;
+constexpr uint8_t unzigzag16[16] = {
+    0 + 0 * 4, 0 + 1 * 4, 1 + 0 * 4, 0 + 2 * 4,
+    0 + 3 * 4, 1 + 1 * 4, 1 + 2 * 4, 1 + 3 * 4,
+    2 + 0 * 4, 2 + 1 * 4, 2 + 2 * 4, 2 + 3 * 4,
+    3 + 0 * 4, 3 + 1 * 4, 3 + 2 * 4, 3 + 3 * 4,
+};
+constexpr uint8_t zigzag16[16] = {
+    0, 2, 8, 12,
+    1, 5, 9, 13,
+    3, 6, 10, 14,
+    4, 7, 11, 15
+};
+
+bool get_neighbor(bool above, int sub_mb_size,
+                  int mb_x, int mb_y, int scan8_index, int zigzag_index,
+                  int &out_mb_x, int &out_mb_y, int &out_scan8_index, int &out_zigzag_index) {
+    int dimension = 2;
+    if (sub_mb_size > 15) {
+        dimension = 4;
+    }
+    if (sub_mb_size > 32) {
+        dimension = 8;
+    }
+    if (scan8_index >= 16 * 3) {
+        // we are DC...
+        int linear_index = zigzag_index;
+        if (sub_mb_size == 16) {
+            linear_index = unzigzag16[zigzag_index];
+        } else {
+            assert(sub_mb_size <= 4);
+        }
+        if ((above && linear_index >= dimension) // if is inner
+            || ((linear_index & (dimension - 1)) && !above)) {
+            if (above) {
+                linear_index -= dimension;
+            } else {
+                -- linear_index;
+            }
+            if (sub_mb_size == 16) {
+                out_zigzag_index = zigzag16[linear_index];
+            } else {
+                out_zigzag_index = linear_index;
+            }
+            out_mb_x = mb_x;
+            out_mb_y = mb_y;
+            out_scan8_index = scan8_index;
+            return true;
+        }
+        if (above) {
+            if (mb_y == 0) {
+                return false;
+            }
+            linear_index += dimension * (dimension - 1);//go to bottom
+            --mb_y;
+        } else {
+            if (mb_x == 0) {
+                return false;
+            }
+            linear_index += dimension - 1;//go to end of row
+            --mb_x;
+        }
+        if (sub_mb_size == 16) {
+            out_zigzag_index = zigzag16[linear_index];
+        } else {
+            out_zigzag_index = linear_index;
+        }
+        out_mb_x = mb_x;
+        out_mb_y = mb_y;
+        out_scan8_index = scan8_index;
+        return true;
+    }
+    int scan8 = scan_8[scan8_index];
+    int left_shift = (above ? 0 : -1);
+    int above_shift = (above ? -1 : 0);
+    auto neighbor = reverse_scan_8[(scan8 >> 3) + left_shift][(scan8 & 7) + above_shift];
+    if (neighbor.neighbor_left) {
+        if (mb_x == 0){
+            return false;
+        } else {
+            --mb_x;
+        }
+    }
+    if (neighbor.neighbor_up) {
+        if (mb_y == 0) {
+            return false;
+        } else {
+            --mb_y;
+        }
+    }
+    out_scan8_index = neighbor.scan8_index;
+    out_zigzag_index = zigzag_index;
+    out_mb_x = mb_x;
+    out_mb_y = mb_y;
+    return true;
+}
+
 class h264_model {
   CodingType coding_type = PIP_UNKNOWN;
   int zigzag_index = 0;
