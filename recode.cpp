@@ -222,6 +222,98 @@ class av_decoder {
 };
 
 
+struct r_scan8 {
+    uint16_t scan8_index;
+    bool neighbor_left;
+    bool neighbor_up;
+    bool is_invalid() const {
+        return scan8_index == 0 && neighbor_left && neighbor_up;
+    }
+    static constexpr r_scan8 inv() {
+        return {0, true, true};
+    }
+};
+/* Scan8 organization:
+ *    0 1 2 3 4 5 6 7
+ * 0  DY    y y y y y
+ * 1        y Y Y Y Y
+ * 2        y Y Y Y Y
+ * 3        y Y Y Y Y
+ * 4  du    y Y Y Y Y
+ * 5  DU    u u u u u
+ * 6        u U U U U
+ * 7        u U U U U
+ * 8        u U U U U
+ * 9  dv    u U U U U
+ * 10 DV    v v v v v
+ * 11       v V V V V
+ * 12       v V V V V
+ * 13       v V V V V
+ * 14       v V V V V
+ * DY/DU/DV are for luma/chroma DC.
+ */
+constexpr uint8_t scan_8[16 * 3 + 3] = {
+    4 +  1 * 8, 5 +  1 * 8, 4 +  2 * 8, 5 +  2 * 8,
+    6 +  1 * 8, 7 +  1 * 8, 6 +  2 * 8, 7 +  2 * 8,
+    4 +  3 * 8, 5 +  3 * 8, 4 +  4 * 8, 5 +  4 * 8,
+    6 +  3 * 8, 7 +  3 * 8, 6 +  4 * 8, 7 +  4 * 8,
+    4 +  6 * 8, 5 +  6 * 8, 4 +  7 * 8, 5 +  7 * 8,
+    6 +  6 * 8, 7 +  6 * 8, 6 +  7 * 8, 7 +  7 * 8,
+    4 +  8 * 8, 5 +  8 * 8, 4 +  9 * 8, 5 +  9 * 8,
+    6 +  8 * 8, 7 +  8 * 8, 6 +  9 * 8, 7 +  9 * 8,
+    4 + 11 * 8, 5 + 11 * 8, 4 + 12 * 8, 5 + 12 * 8,
+    6 + 11 * 8, 7 + 11 * 8, 6 + 12 * 8, 7 + 12 * 8,
+    4 + 13 * 8, 5 + 13 * 8, 4 + 14 * 8, 5 + 14 * 8,
+    6 + 13 * 8, 7 + 13 * 8, 6 + 14 * 8, 7 + 14 * 8,
+    0 +  0 * 8, 0 +  5 * 8, 0 + 10 * 8
+};
+
+constexpr r_scan8 reverse_scan_8[15][8] = {
+    //Y
+    {{16 * 3, false, false}, r_scan8::inv(), r_scan8::inv(), {15, true, true},
+     {10, false, true}, {11, false, true}, {14, false, true}, {15, false, true}},
+    {r_scan8::inv(), r_scan8::inv(), r_scan8::inv(), {5, true, false},
+     {0, false, false}, {1, false, false}, {4, false, false}, {5, false, false}},
+    {r_scan8::inv(), r_scan8::inv(), r_scan8::inv(), {7, true, false},
+     {2, false, false}, {3, false, false}, {6, false, false}, {7, false, false}},
+    {r_scan8::inv(), r_scan8::inv(), r_scan8::inv(), {13, true, false},
+     {8, false, false}, {9, false, false}, {12, false, false}, {13, false, false}},
+    {{16 * 3 + 1,false, true}, r_scan8::inv(), r_scan8::inv(), {15, true, false},
+     {10, false, false}, {11, false, false}, {14, false, false}, {15, false, false}},
+    // U
+    {{16 * 3 + 1,false, false}, r_scan8::inv(), r_scan8::inv(), {16 + 15, true, true},
+     {16 + 10, false, true}, {16 + 11, false, true}, {16 + 14, false, true}, {16 + 15, false, true}},
+    {r_scan8::inv(), r_scan8::inv(), r_scan8::inv(), {16 + 5, true, false},
+     {16 + 0, false, false}, {16 + 1, false, false}, {16 + 4, false, false}, {16 + 5, false, false}},
+    {r_scan8::inv(), r_scan8::inv(), r_scan8::inv(), {16 + 7, true, false},
+     {16 + 2, false, false}, {16 + 3, false, false}, {16 + 6, false, false}, {16 + 7, false, false}},
+    {r_scan8::inv(), r_scan8::inv(), r_scan8::inv(), {16 + 13, true, false},
+     {16 + 8, false, false}, {16 + 9, false, false}, {16 + 12, false, false}, {16 + 13, false, false}},
+    {{16 * 3 + 2,false, true}, r_scan8::inv(), r_scan8::inv(), {16 + 15, true, false},
+     {16 + 10, false, false}, {16 + 11, false, false}, {16 + 14, false, false}, {16 + 15, false, false}},
+    // V
+    {{16 * 3 + 2,false, false}, r_scan8::inv(), r_scan8::inv(), {32 + 15, true, true},
+     {32 + 10, false, true}, {32 + 11, false, true}, {32 + 14, false, true}, {32 + 15, false, true}},
+    {r_scan8::inv(), r_scan8::inv(), r_scan8::inv(), {32 + 5, true, false},
+     {32 + 0, false, false}, {32 + 1, false, false}, {32 + 4, false, false}, {32 + 5, false, false}},
+    {r_scan8::inv(), r_scan8::inv(), r_scan8::inv(), {32 + 7, true, false},
+     {32 + 2, false, false}, {32 + 3, false, false}, {32 + 6, false, false}, {32 + 7, false, false}},
+    {r_scan8::inv(), r_scan8::inv(), r_scan8::inv(), {32 + 13, true, false},
+     {32 + 8, false, false}, {32 + 9, false, false}, {32 + 12, false, false}, {32 + 13, false, false}},
+    {{32 + 16 * 3 + 1,false, true}, r_scan8::inv(), r_scan8::inv(), {32 + 15, true, false},
+     {32 + 10, false, false}, {32 + 11, false, false}, {32 + 14, false, false}, {32 + 15, false, false}}};
+int test_reverse_scan8() {
+    for (size_t i = 0; i < sizeof(scan_8)/ sizeof(scan_8[0]); ++i) {
+        auto a = reverse_scan_8[scan_8[i] >> 3][scan_8[i] & 7];
+        assert(a.neighbor_left == false && a.neighbor_up == false);
+        assert(a.scan8_index == i);
+        if (a.scan8_index != i) {
+            return 1;
+        }
+    }
+    return 0;
+}
+int make_sure_reverse_scan8 = test_reverse_scan8();
 // Encoder / decoder for recoded CABAC blocks.
 typedef uint64_t range_t;
 typedef arithmetic_code<range_t, uint8_t> recoded_code;
@@ -322,8 +414,11 @@ class h264_model {
                 num_nonzeros += 1;
             }
         }
-        assert(frames[cur_frame].meta_at(mb_x, mb_y).num_nonzeros[sub_mb_index] == 0);
-        frames[cur_frame].meta_at(mb_x, mb_y).num_nonzeros[sub_mb_index] = num_nonzeros;
+        BlockMeta &meta = frames[cur_frame].meta_at(mb_x, mb_y);
+        meta.is_8x8 = meta.is_8x8 || (sub_mb_size > 32); // 8x8 will have DC be 2x2
+        meta.coded = true;
+        assert(meta.num_nonzeros[sub_mb_index] == 0);
+        meta.num_nonzeros[sub_mb_index] = num_nonzeros;
       }
       coding_type = PIP_UNKNOWN;
   }
