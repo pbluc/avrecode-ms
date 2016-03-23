@@ -165,13 +165,13 @@ class av_decoder {
     }
     static void mb_xy(void *opaque, int x, int y) {
       auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
-      self->mb_x = x;
-      self->mb_y = y;
+      self->mb_coord.mb_x = x;
+      self->mb_coord.mb_y = y;
     }
     static void begin_sub_mb(void *opaque, int cat, int scan8index, int max_coeff, int is_dc, int chroma422) {
       auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
       self->sub_mb_cat = cat;
-      self->sub_mb_index = scan8index;
+      self->mb_coord.scan8_index = scan8index;
       self->sub_mb_size = max_coeff;
       self->sub_mb_is_dc = is_dc;
       self->sub_mb_chroma422 = chroma422;
@@ -179,12 +179,12 @@ class av_decoder {
     static void end_sub_mb(void *opaque, int cat, int scan8index, int max_coeff, int is_dc, int chroma422) {
       auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
       assert(self->sub_mb_cat == cat);
-      assert(self->sub_mb_index == scan8index);
+      assert(self->mb_coord.scan8_index == scan8index);
       assert(self->sub_mb_size == max_coeff);
       assert(self->sub_mb_is_dc == is_dc);
       assert(self->sub_mb_chroma422 == chroma422);
       self->sub_mb_cat = -1;
-      self->sub_mb_index = -1;
+      self->mb_coord.scan8_index = -1;
       self->sub_mb_size = -1;
       self->sub_mb_is_dc = 0;
       self->sub_mb_chroma422 = 0;
@@ -308,6 +308,8 @@ typedef uint64_t range_t;
 typedef arithmetic_code<range_t, uint8_t> recoded_code;
 
 typedef std::tuple<const void*, int, int> model_key;
+/*
+not sure these tables are the ones we want to use
 constexpr uint8_t unzigzag16[16] = {
     0 + 0 * 4, 0 + 1 * 4, 1 + 0 * 4, 0 + 2 * 4,
     0 + 3 * 4, 1 + 1 * 4, 1 + 2 * 4, 1 + 3 * 4,
@@ -320,6 +322,69 @@ constexpr uint8_t zigzag16[16] = {
     3, 6, 10, 14,
     4, 7, 11, 15
 };
+
+constexpr uint8_t zigzag_field64[64] = {
+    0 + 0 * 8, 0 + 1 * 8, 0 + 2 * 8, 1 + 0 * 8,
+    1 + 1 * 8, 0 + 3 * 8, 0 + 4 * 8, 1 + 2 * 8,
+    2 + 0 * 8, 1 + 3 * 8, 0 + 5 * 8, 0 + 6 * 8,
+    0 + 7 * 8, 1 + 4 * 8, 2 + 1 * 8, 3 + 0 * 8,
+    2 + 2 * 8, 1 + 5 * 8, 1 + 6 * 8, 1 + 7 * 8,
+    2 + 3 * 8, 3 + 1 * 8, 4 + 0 * 8, 3 + 2 * 8,
+    2 + 4 * 8, 2 + 5 * 8, 2 + 6 * 8, 2 + 7 * 8,
+    3 + 3 * 8, 4 + 1 * 8, 5 + 0 * 8, 4 + 2 * 8,
+    3 + 4 * 8, 3 + 5 * 8, 3 + 6 * 8, 3 + 7 * 8,
+    4 + 3 * 8, 5 + 1 * 8, 6 + 0 * 8, 5 + 2 * 8,
+    4 + 4 * 8, 4 + 5 * 8, 4 + 6 * 8, 4 + 7 * 8,
+    5 + 3 * 8, 6 + 1 * 8, 6 + 2 * 8, 5 + 4 * 8,
+    5 + 5 * 8, 5 + 6 * 8, 5 + 7 * 8, 6 + 3 * 8,
+    7 + 0 * 8, 7 + 1 * 8, 6 + 4 * 8, 6 + 5 * 8,
+    6 + 6 * 8, 6 + 7 * 8, 7 + 2 * 8, 7 + 3 * 8,
+    7 + 4 * 8, 7 + 5 * 8, 7 + 6 * 8, 7 + 7 * 8,
+};
+
+*/
+constexpr uint8_t zigzag4[4] = {
+    0, 1, 2, 3
+};
+constexpr uint8_t unzigzag4[4] = {
+    0, 1, 2, 3
+};
+
+constexpr uint8_t unzigzag16[16] = {
+    0, 1, 4, 8,
+    5, 2, 3, 6,
+    9, 12, 13, 10,
+    7, 11, 14, 15
+};
+constexpr uint8_t zigzag16[16] = {
+    0, 1, 5, 6,
+    2, 4, 7, 12,
+    3, 8, 11, 13,
+    9, 10, 14, 15
+};
+constexpr uint8_t unzigzag64[64] = {
+    0,   1,  8, 16,  9,  2,  3, 10,
+    17, 24, 32, 25, 18, 11,  4,  5,
+    12, 19, 26, 33, 40, 48, 41, 34,
+    27, 20, 13,  6,  7, 14, 21, 28,
+    35, 42, 49, 56, 57, 50, 43, 36,
+    29, 22, 15, 23, 30, 37, 44, 51,
+    58, 59, 52, 45, 38, 31, 39, 46,
+    53, 60, 61, 54, 47, 55, 62, 63
+};
+
+constexpr uint8_t zigzag64[64] = {
+    0, 1, 5, 6, 14, 15, 27, 28,
+    2, 4, 7, 13, 16, 26, 29, 42,
+    3, 8, 12, 17, 25, 30, 41, 43,
+    9, 11, 18, 24, 31, 40, 44, 53,
+    10, 19, 23, 32, 39, 45, 52, 54,
+    20, 22, 33, 38, 46, 51, 55, 60,
+    21, 34, 37, 47, 50, 56, 59, 61,
+    35, 36, 48, 49, 57, 58, 62, 63
+};
+
+
 int test_reverse_scan8() {
     for (size_t i = 0; i < sizeof(scan_8)/ sizeof(scan_8[0]); ++i) {
         auto a = reverse_scan_8[scan_8[i] >> 3][scan_8[i] & 7];
@@ -336,10 +401,20 @@ int test_reverse_scan8() {
     return 0;
 }
 int make_sure_reverse_scan8 = test_reverse_scan8();
+struct CoefficientCoord {
+    int mb_x;
+    int mb_y;
+    int scan8_index;
+    int zigzag_index;
+};
 
 bool get_neighbor(bool above, int sub_mb_size,
-                  int mb_x, int mb_y, int scan8_index, int zigzag_index,
-                  int &out_mb_x, int &out_mb_y, int &out_scan8_index, int &out_zigzag_index) {
+                  CoefficientCoord input,
+                  CoefficientCoord *output) {
+    int mb_x = input.mb_x;
+    int mb_y = input.mb_y;
+    int scan8_index = input.scan8_index;
+    int zigzag_index = input.zigzag_index;
     int dimension = 2;
     if (sub_mb_size > 15) {
         dimension = 4;
@@ -349,7 +424,7 @@ bool get_neighbor(bool above, int sub_mb_size,
     }
     if (scan8_index >= 16 * 3) {
         // we are DC...
-        int linear_index = zigzag_index;
+        int linear_index = unzigzag4[zigzag_index];
         if (sub_mb_size == 16) {
             linear_index = unzigzag16[zigzag_index];
         } else {
@@ -363,13 +438,13 @@ bool get_neighbor(bool above, int sub_mb_size,
                 -- linear_index;
             }
             if (sub_mb_size == 16) {
-                out_zigzag_index = zigzag16[linear_index];
+                output->zigzag_index = zigzag16[linear_index];
             } else {
-                out_zigzag_index = linear_index;
+                output->zigzag_index = zigzag4[linear_index];
             }
-            out_mb_x = mb_x;
-            out_mb_y = mb_y;
-            out_scan8_index = scan8_index;
+            output->mb_x = mb_x;
+            output->mb_y = mb_y;
+            output->scan8_index = scan8_index;
             return true;
         }
         if (above) {
@@ -386,13 +461,13 @@ bool get_neighbor(bool above, int sub_mb_size,
             --mb_x;
         }
         if (sub_mb_size == 16) {
-            out_zigzag_index = zigzag16[linear_index];
+            output->zigzag_index = zigzag16[linear_index];
         } else {
-            out_zigzag_index = linear_index;
+            output->zigzag_index = linear_index;
         }
-        out_mb_x = mb_x;
-        out_mb_y = mb_y;
-        out_scan8_index = scan8_index;
+        output->mb_x = mb_x;
+        output->mb_y = mb_y;
+        output->scan8_index = scan8_index;
         return true;
     }
     int scan8 = scan_8[scan8_index];
@@ -413,20 +488,63 @@ bool get_neighbor(bool above, int sub_mb_size,
             --mb_y;
         }
     }
-    out_scan8_index = neighbor.scan8_index;
+    output->scan8_index = neighbor.scan8_index;
     if (sub_mb_size >= 32) {
-        out_scan8_index /= 4;
-        out_scan8_index *= 4; // round down to the nearest multiple of 4
+        output->scan8_index /= 4;
+        output->scan8_index *= 4; // round down to the nearest multiple of 4
     }
-    out_zigzag_index = zigzag_index;
-    out_mb_x = mb_x;
-    out_mb_y = mb_y;
+    output->zigzag_index = zigzag_index;
+    output->mb_x = mb_x;
+    output->mb_y = mb_y;
+    return true;
+}
+
+bool get_neighbor_coefficient(bool above,
+                              int sub_mb_size,
+                              CoefficientCoord input,
+                              CoefficientCoord *output) {
+    if (input.scan8_index >= 16 * 3) {
+        return get_neighbor(above, sub_mb_size, input, output);
+    }
+    int zigzag_addition = 0;
+    if ((sub_mb_size & (sub_mb_size - 1)) != 0) {
+        zigzag_addition = 1;// the DC is not included
+    }
+    
+    const uint8_t *zigzag_to_raster = zigzag16;
+    const uint8_t *raster_to_zigzag = unzigzag16;
+    int dim = 4;
+    if (sub_mb_size <= 4) {
+        dim = 2;
+        zigzag_to_raster = zigzag4;
+        raster_to_zigzag = unzigzag4;
+    }
+    if (sub_mb_size > 16) {
+        dim = 16;
+        zigzag_to_raster = zigzag64;
+        raster_to_zigzag = unzigzag64;
+    }
+    int raster_coord = zigzag_to_raster[input.zigzag_index + zigzag_addition];
+    if (above) {
+        if (raster_coord >= dim) {
+            raster_coord -= dim;
+        } else {
+            return false;
+        }
+    } else {
+        if (raster_coord & (dim - 1)) {
+            raster_coord -= 1;
+        } else {
+            return false;
+        }
+    }
+    *output = input;
+    output->zigzag_index = raster_to_zigzag[raster_coord] - zigzag_addition;
     return true;
 }
 
 class h264_model {
   CodingType coding_type = PIP_UNKNOWN;
-  int zigzag_index = 0;
   FrameBuffer frames[2];
   int cur_frame = 0;
  public:
@@ -434,6 +552,16 @@ class h264_model {
 
   void reset() {
       // reset should do nothing as we wish to remember what we've learned
+  }
+  bool fetch(bool previous, bool match_type, CoefficientCoord coord, int16_t*output) const{
+      if (match_type && (previous || coord.mb_x != mb_coord.mb_x || coord.mb_y != mb_coord.mb_y)) {
+          //BlockMeta meta = frames[previous ? !cur_frame : cur_frame].meta_at(coord.mb_x, coord.mb_y);
+          if (false/*!meta.coded*/) { // when we populate mb_type in the metadata, then we can use it here
+              return false;
+          }
+      }
+      frames[previous ? !cur_frame : cur_frame].at(coord.mb_x, coord.mb_y).residual[coord.scan8_index * 16 + coord.zigzag_index];
+      return true;
   }
   model_key get_model_key(const void *context)const {
       switch(coding_type) {
@@ -455,21 +583,69 @@ class h264_model {
               };
               int cat_lookup[14] = { 105+0, 105+15, 105+29, 105+44, 105+47, 402, 484+0, 484+15, 484+29, 660, 528+0, 528+15, 528+29, 718 };
               static const uint8_t sig_coeff_offset_dc[7] = { 0, 0, 1, 1, 2, 2, 2 };
-              int zigzag_offset = zigzag_index;
+              int zigzag_offset = mb_coord.zigzag_index;
               if (sub_mb_is_dc && sub_mb_chroma422) {
-                      assert(zigzag_index < 7);
-                  zigzag_offset = sig_coeff_offset_dc[zigzag_index];
+                  assert(mb_coord.zigzag_index < 7);
+                  zigzag_offset = sig_coeff_offset_dc[mb_coord.zigzag_index];
               } else {
                   if (sub_mb_size > 32) {
-                      assert(zigzag_index < 63);
-                      zigzag_offset = sig_coeff_flag_offset_8x8[0][zigzag_index];
+                      assert(mb_coord.zigzag_index < 63);
+                      zigzag_offset = sig_coeff_flag_offset_8x8[0][mb_coord.zigzag_index];
                   }
               }
               assert(sub_mb_cat < (int)(sizeof(cat_lookup)/sizeof(cat_lookup[0])));
-              // FIXME: why doesn't this prior help at all
+              int neighbor_above = 2;
+              int neighbor_left = 2;
+              int coeff_neighbor_above = 2;
+              int coeff_neighbor_left = 2;
+              {
+                  CoefficientCoord neighbor_left_coord = {0, 0, 0, 0};
+                  if (get_neighbor(false, sub_mb_size, mb_coord, &neighbor_left_coord)) {
+                      int16_t tmp = 0;
+                      if (fetch(false, true, neighbor_left_coord, &tmp)){
+                          neighbor_left = !!tmp;
+                      } else {
+                          neighbor_left = 3;
+                      }
+                  }
+              }
+              {
+                  CoefficientCoord neighbor_above_coord = {0, 0, 0, 0};
+                  if (get_neighbor(true, sub_mb_size, mb_coord, &neighbor_above_coord)) {
+                      int16_t tmp = 0;
+                      if (fetch(false, true, neighbor_above_coord, &tmp)){
+                          neighbor_above = !!tmp;
+                      } else {
+                          neighbor_above = 3;
+                      }
+                  }
+              }
+              {
+                  CoefficientCoord neighbor_left_coord = {0, 0, 0, 0};
+                  if (get_neighbor_coefficient(false, sub_mb_size, mb_coord, &neighbor_left_coord)) {
+                      int16_t tmp = 0;
+                      if (fetch(false, true, neighbor_left_coord, &tmp)){
+                          coeff_neighbor_left = !!tmp;
+                      } else {
+                          coeff_neighbor_left = 3;
+                      }
+                  }
+              }
+              {
+                  CoefficientCoord neighbor_above_coord = {0, 0, 0, 0};
+                  if (get_neighbor_coefficient(true, sub_mb_size, mb_coord, &neighbor_above_coord)) {
+                      int16_t tmp = 0;
+                      if (fetch(false, true, neighbor_above_coord, &tmp)){
+                          coeff_neighbor_above = !!tmp;
+                      } else {
+                          coeff_neighbor_above = 3;
+                      }
+                  }
+              }
+              // FIXM: why doesn't this prior help at all
               //const BlockMeta &meta = frames[!cur_frame].meta_at(mb_x, mb_y);
               return model_key(&significance_context,
-                               0/*frames[!cur_frame].at(mb_x, mb_y).residual[sub_mb_index * 16 + zigzag_index] ? 1 : 0*/,
+                               neighbor_left + 4 * neighbor_above + 16 * coeff_neighbor_left + 64 * coeff_neighbor_above,
                                sub_mb_is_dc + zigzag_offset * 2 + 16 * 2 * cat_lookup[sub_mb_cat]);
           }
         case PIP_SIGNIFICANCE_EOB:
@@ -510,20 +686,20 @@ class h264_model {
   void end_coding_type(CodingType ct) {
       if (ct == PIP_SIGNIFICANCE_MAP) {
         assert(coding_type == PIP_UNREACHABLE
-               || (coding_type == PIP_SIGNIFICANCE_MAP && zigzag_index == 0));
+               || (coding_type == PIP_SIGNIFICANCE_MAP && mb_coord.zigzag_index == 0));
         uint8_t num_nonzeros = 0;
         for (int i = 0; i < sub_mb_size; ++i) {
-            int16_t res = frames[cur_frame].at(mb_x, mb_y).residual[sub_mb_index * 16 + i];
+            int16_t res = frames[cur_frame].at(mb_coord.mb_x, mb_coord.mb_y).residual[mb_coord.scan8_index * 16 + i];
             assert(res == 1 || res == 0);
             if (res != 0) {
                 num_nonzeros += 1;
             }
         }
-        BlockMeta &meta = frames[cur_frame].meta_at(mb_x, mb_y);
+        BlockMeta &meta = frames[cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y);
         meta.is_8x8 = meta.is_8x8 || (sub_mb_size > 32); // 8x8 will have DC be 2x2
         meta.coded = true;
-        assert(meta.num_nonzeros[sub_mb_index] == 0);
-        meta.num_nonzeros[sub_mb_index] = num_nonzeros;
+        assert(meta.num_nonzeros[mb_coord.scan8_index] == 0);
+        meta.num_nonzeros[mb_coord.scan8_index] = num_nonzeros;
       }
       coding_type = PIP_UNKNOWN;
   }
@@ -531,10 +707,11 @@ class h264_model {
     coding_type = ct;
     switch (ct) {
     case PIP_SIGNIFICANCE_MAP:
+      assert(!zz_index);
       if (sub_mb_is_dc) {
-        zigzag_index = 0;
+        mb_coord.zigzag_index = 0;
       } else {
-        zigzag_index = 0;
+        mb_coord.zigzag_index = 0;
       }
       break;
     default:
@@ -544,31 +721,31 @@ class h264_model {
   void update_state_tracking(int symbol) {
     switch (coding_type) {
     case PIP_SIGNIFICANCE_MAP:
-      frames[cur_frame].at(mb_x, mb_y).residual[sub_mb_index * 16 + zigzag_index] = symbol;
-      if (zigzag_index + 1 == sub_mb_size) {
+      frames[cur_frame].at(mb_coord.mb_x, mb_coord.mb_y).residual[mb_coord.scan8_index * 16 + mb_coord.zigzag_index] = symbol;
+      if (mb_coord.zigzag_index + 1 == sub_mb_size) {
         coding_type = PIP_UNREACHABLE;
-        zigzag_index = 0;
+        mb_coord.zigzag_index = 0;
       } else {
         if (symbol) {
           coding_type = PIP_SIGNIFICANCE_EOB;
         } else {
-          ++zigzag_index;
-          if (zigzag_index + 1 == sub_mb_size) {
+          ++mb_coord.zigzag_index;
+          if (mb_coord.zigzag_index + 1 == sub_mb_size) {
               // if we were a zero and we haven't eob'd then the
               // next and last must be a one
               coding_type = PIP_UNREACHABLE;
-              zigzag_index = 0;
+              mb_coord.zigzag_index = 0;
           }
         }
       }
       break;
     case PIP_SIGNIFICANCE_EOB:
-      if (symbol || zigzag_index + 2 == sub_mb_size) {
-        zigzag_index = 0;
+      if (symbol || mb_coord.zigzag_index + 2 == sub_mb_size) {
+        mb_coord.zigzag_index = 0;
         coding_type = PIP_UNREACHABLE;
       } else {
         coding_type = PIP_SIGNIFICANCE_MAP;
-        ++zigzag_index;
+        ++mb_coord.zigzag_index;
       }
       break;
     case PIP_RESIDUALS:
@@ -585,7 +762,8 @@ class h264_model {
     } else {
       e->neg++;
     }
-    if (e->pos + e->neg > 0x60) {
+    if ((coding_type != PIP_SIGNIFICANCE_MAP && e->pos + e->neg > 0x60)
+        || (coding_type == PIP_SIGNIFICANCE_MAP && e->pos + e->neg > 0x50)) {
       e->pos = (e->pos + 1) / 2;
       e->neg = (e->neg + 1) / 2;
     }
@@ -593,9 +771,7 @@ class h264_model {
   }
 
   const uint8_t bypass_context = 0, terminate_context = 0, significance_context = 0;
-  int mb_x = 0;
-  int mb_y = 0;
-  int sub_mb_index = -1;
+  CoefficientCoord mb_coord;
   int sub_mb_cat = -1;
   int sub_mb_size = -1;
   int sub_mb_is_dc = 0;
