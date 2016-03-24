@@ -507,12 +507,12 @@ bool get_neighbor_coefficient(bool above,
         return get_neighbor(above, sub_mb_size, input, output);
     }
     int zigzag_addition = 0;
+
     if ((sub_mb_size & (sub_mb_size - 1)) != 0) {
         zigzag_addition = 1;// the DC is not included
     }
-    
-    const uint8_t *zigzag_to_raster = zigzag16;
-    const uint8_t *raster_to_zigzag = unzigzag16;
+    const uint8_t *zigzag_to_raster = unzigzag16;
+    const uint8_t *raster_to_zigzag = zigzag16;
     int dim = 4;
     if (sub_mb_size <= 4) {
         dim = 2;
@@ -525,6 +525,7 @@ bool get_neighbor_coefficient(bool above,
         raster_to_zigzag = unzigzag64;
     }
     int raster_coord = zigzag_to_raster[input.zigzag_index + zigzag_addition];
+    //fprintf(stderr, "%d %d   %d -> %d\n", sub_mb_size, zigzag_addition, input.zigzag_index, raster_coord);
     if (above) {
         if (raster_coord >= dim) {
             raster_coord -= dim;
