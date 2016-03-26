@@ -1026,8 +1026,8 @@ class decompressor {
       if (block->has_cabac()) {
         model = &d->model;
         model->reset();
-        decoder = std::make_unique<recoded_code::decoder<const char*, uint8_t>>(
-            block->cabac().data(), block->cabac().data() + block->cabac().size());
+        decoder.reset(new recoded_code::decoder<const char*, uint8_t>(
+            block->cabac().data(), block->cabac().data() + block->cabac().size()));
       } else if (block->has_skip_coded() && block->skip_coded()) {
         // We're skipping this block, so disable calls to our hooks.
         ctx_in->coding_hooks = nullptr;
