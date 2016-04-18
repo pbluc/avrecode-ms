@@ -96,12 +96,14 @@ struct arithmetic_code {
     explicit encoder(OutputIterator out)
       : encoder(out, fixed_one) {}
     encoder(OutputIterator out, FixedPoint initial_range)
-      : out(out), low(0), range(initial_range) {}
+      : bytes_emitted(0), out(out), low(0), range(initial_range) {}
     ~encoder() { finish(); }
-
+     size_t get_bytes_emitted()const {
+        return bytes_emitted;
+     }
     // Symbol is int instead of bool because additional versions of `put()` could
     // accept more than two symbols, e.g. one could call `put(2, p1, p2, p3)`.
-    void put(int symbol, std::function<FixedPoint(FixedPoint)> probability_of_1) {
+    size_t put(int symbol, std::function<FixedPoint(FixedPoint)> probability_of_1) {
       FixedPoint range_of_1 = probability_of_1(range);
       FixedPoint range_of_0 = range - range_of_1;
       if (symbol != 0) {
@@ -114,10 +116,13 @@ struct arithmetic_code {
         if (range == 0) {
           throw std::runtime_error("Encoder error: emitted a zero-probability symbol.");
         }
+        size_t emitted_before = get_bytes_emitted();
         while (range < max_range/digit_base) {
           renormalize_and_emit_digit<CompressedDigit>();
         }
+        return get_bytes_emitted() - emitted_before;
       }
+      return 0;
     }
 
     void finish() {
@@ -181,8 +186,9 @@ struct arithmetic_code {
       for (int i = sizeof(Digit)-sizeof(OutputDigit); i >= 0; i -= sizeof(OutputDigit)) {
         *out++ = OutputDigit(digit >> (8*i));
       }
+      bytes_emitted += sizeof(digit);
     }
-
+    size_t bytes_emitted;
     // Output digits are emitted to this iterator as they are produced.
     OutputIterator out;
     // The lower bound x, initialized to 0. (When overflow.size() > 0, low is

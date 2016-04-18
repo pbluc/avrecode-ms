@@ -543,14 +543,44 @@ bool get_neighbor_coefficient(bool above,
     output->zigzag_index = raster_to_zigzag[raster_coord] - zigzag_addition;
     return true;
 }
-
+#define STRINGIFY_COMMA(s) #s ,
+const char * billing_names [] = {EACH_PIP_CODING_TYPE(STRINGIFY_COMMA)};
+#undef STRINGIFY_COMMA
 class h264_model {
   CodingType coding_type = PIP_UNKNOWN;
+  size_t bill[sizeof(billing_names)/sizeof(billing_names[0])];
+  size_t cabac_bill[sizeof(billing_names)/sizeof(billing_names[0])];
   FrameBuffer frames[2];
   int cur_frame = 0;
  public:
-  h264_model() { reset(); }
-
+  h264_model() { reset(); memset(bill, 0, sizeof(bill)); memset(cabac_bill, 0, sizeof(cabac_bill));}
+  ~h264_model() {
+      bool first = true;
+      for (size_t i = 0; i < sizeof(billing_names)/sizeof(billing_names[i]); ++i) {
+          if (bill[i]) {
+              if (first) {
+                  fprintf(stderr, "Avrecode Bill\n=============\n");
+              }
+              first = false;
+              fprintf(stderr, "%s : %ld\n", billing_names[i], bill[i]);
+          }
+      }
+      for (size_t i = 0; i < sizeof(billing_names)/sizeof(billing_names[i]); ++i) {
+          if (cabac_bill[i]) {
+              if (first) {
+                  fprintf(stderr, "CABAC Bill\n=============\n");
+              }
+              first = false;
+              fprintf(stderr, "%s : %ld\n", billing_names[i], cabac_bill[i]);
+          }
+      }
+  }
+  void billable_bytes(size_t num_bytes_emitted) {
+      bill[coding_type] += num_bytes_emitted;
+  }
+  void billable_cabac_bytes(size_t num_bytes_emitted) {
+      cabac_bill[coding_type] += num_bytes_emitted;
+  }
   void reset() {
       // reset should do nothing as we wish to remember what we've learned
   }
@@ -655,6 +685,8 @@ class h264_model {
             //const BlockMeta &meta = frames[!cur_frame].meta_at(mb_x, mb_y);
             return model_key(context, 0/*meta.num_nonzeros[sub_mb_index]*/, 0);//;
           }
+        default:
+          break;
       }
       assert(false && "Unreachable");
       abort();
@@ -754,6 +786,8 @@ class h264_model {
       break;
     case PIP_UNREACHABLE:
       assert(false);
+    default:
+      assert(false);
     }
   }
   void update_state(int symbol, const void *context) {
@@ -841,25 +875,35 @@ class compressor {
 
     int get(uint8_t *state) {
       int symbol = ::ff_get_cabac(&ctx, state);
-      encoder.put(symbol, [&](range_t range){
+
+      size_t billable_bytes = encoder.put(symbol, [&](range_t range){
           return model->probability_for_state(range, state); });
+      if (billable_bytes) {
+          model->billable_bytes(billable_bytes);
+      }
       model->update_state(symbol, state);
       return symbol;
     }
 
     int get_bypass() {
       int symbol = ::ff_get_cabac_bypass(&ctx);
-      encoder.put(symbol, [&](range_t range){
+      size_t billable_bytes = encoder.put(symbol, [&](range_t range){
           return model->probability_for_state(range, &model->bypass_context); });
       model->update_state(symbol, &model->bypass_context);
+      if (billable_bytes) {
+          model->billable_bytes(billable_bytes);
+      }
       return symbol;
     }
 
     int get_terminate() {
       int n = ::ff_get_cabac_terminate(&ctx);
       int symbol = (n != 0);
-      encoder.put(symbol, [&](range_t range){
+      size_t billable_bytes = encoder.put(symbol, [&](range_t range){
           return model->probability_for_state(range, &model->terminate_context); });
+      if (billable_bytes) {
+          model->billable_bytes(billable_bytes);
+      }
       model->update_state(symbol, &model->terminate_context);
       if (symbol) {
         encoder.finish();
@@ -1043,7 +1087,10 @@ class decompressor {
       int symbol = decoder->get([&](range_t range){
           return model->probability_for_state(range, state); });
       model->update_state(symbol, state);
-      cabac_encoder.put(symbol, state);
+      size_t billable_bytes = cabac_encoder.put(symbol, state);
+      if (billable_bytes) {
+          model->billable_cabac_bytes(billable_bytes);
+      }
       return symbol;
     }
 
@@ -1051,7 +1098,10 @@ class decompressor {
       int symbol = decoder->get([&](range_t range){
           return model->probability_for_state(range, &model->bypass_context); });
       model->update_state(symbol, &model->bypass_context);
-      cabac_encoder.put_bypass(symbol);
+      size_t billable_bytes = cabac_encoder.put_bypass(symbol);
+      if (billable_bytes) {
+          model->billable_cabac_bytes(billable_bytes);
+      }
       return symbol;
     }
 
@@ -1059,7 +1109,10 @@ class decompressor {
       int symbol = decoder->get([&](range_t range){
           return model->probability_for_state(range, &model->terminate_context); });
       model->update_state(symbol, &model->terminate_context);
-      cabac_encoder.put_terminate(symbol);
+      size_t billable_bytes = cabac_encoder.put_terminate(symbol);
+      if (billable_bytes) {
+          model->billable_cabac_bytes(billable_bytes);
+      }
       if (symbol) {
         finish();
       }
