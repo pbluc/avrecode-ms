@@ -889,10 +889,12 @@ public:
   template <class T>
   void execute(T &encoder, h264_model *model,
       Recoded::Block *out, std::vector<uint8_t> &encoder_out) {
-    size_t billable_bytes = encoder.put(symbol, [&](range_t range){
-        return model->probability_for_state(range, state); });
-    if (billable_bytes) {
+    if (model->coding_type != PIP_SIGNIFICANCE_EOB) {
+      size_t billable_bytes = encoder.put(symbol, [&](range_t range){
+          return model->probability_for_state(range, state); });
+      if (billable_bytes) {
         model->billable_bytes(billable_bytes);
+      }
     }
     model->update_state(symbol, state);
     if (state == &model->terminate_context && symbol) {
@@ -1238,8 +1240,13 @@ class decompressor {
     ~cabac_decoder() { assert(out->done); }
 
     int get(uint8_t *state) {
-      int symbol = decoder->get([&](range_t range){
-          return model->probability_for_state(range, state); });
+     int symbol;
+      if (model->coding_type == PIP_SIGNIFICANCE_EOB) {
+          symbol = std::get<1>(model->get_model_key(state));
+      } else {
+        symbol = decoder->get([&](range_t range){
+           return model->probability_for_state(range, state); });
+      }
       model->update_state(symbol, state);
       size_t billable_bytes = cabac_encoder.put(symbol, state);
       if (billable_bytes) {
