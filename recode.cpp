@@ -1002,9 +1002,12 @@ class compressor {
         stop_queueing_symbols();
         model->finished_queueing(ct,
             [&](uint8_t *state, int *symbol) {
-               encoder.put(*symbol, [&](range_t range){
+               size_t billable_bytes = encoder.put(*symbol, [&](range_t range){
                    return model->probability_for_state(range, state);
                });
+               if (billable_bytes) {
+                   model->billable_bytes(billable_bytes);
+               }
             });
         static int i = 0;
         if (i++ < 10) {
