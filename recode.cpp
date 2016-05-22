@@ -684,8 +684,9 @@ class h264_model {
               }
               // FIXM: why doesn't this prior help at all
               //const BlockMeta &meta = frames[!cur_frame].meta_at(mb_x, mb_y);
+              int num_nonzeros = frames[cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y).num_nonzeros[mb_coord.scan8_index];
               return model_key(&significance_context,
-                               neighbor_left + 4 * neighbor_above + 16 * coeff_neighbor_left + 64 * coeff_neighbor_above,
+                               256 * num_nonzeros + neighbor_left + 4 * neighbor_above + 16 * coeff_neighbor_left + 64 * coeff_neighbor_above,
                                sub_mb_is_dc + zigzag_offset * 2 + 16 * 2 * cat_lookup[sub_mb_cat]);
           }
         case PIP_SIGNIFICANCE_EOB:
