@@ -829,9 +829,12 @@ class h264_model {
       }
       break;
     case PIP_SIGNIFICANCE_EOB:
-      if (symbol || mb_coord.zigzag_index + 2 == sub_mb_size) {
+      if (symbol) {
         mb_coord.zigzag_index = 0;
         coding_type = PIP_UNREACHABLE;
+      } else if (mb_coord.zigzag_index + 2 == sub_mb_size) {
+        frames[cur_frame].at(mb_coord.mb_x, mb_coord.mb_y).residual[mb_coord.scan8_index * 16 + mb_coord.zigzag_index + 1] = 1;
+        coding_type = PIP_UNREACHABLE;  
       } else {
         coding_type = PIP_SIGNIFICANCE_MAP;
         ++mb_coord.zigzag_index;
@@ -847,6 +850,10 @@ class h264_model {
     }
   }
   void update_state(int symbol, const void *context) {
+    if (coding_type == PIP_SIGNIFICANCE_EOB) {
+        int num_nonzeros = frames[cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y).num_nonzeros[mb_coord.scan8_index];
+        assert(symbol == (num_nonzeros == nonzeros_observed));
+    }
     auto* e = &estimators[get_model_key(context)];
     if (symbol) {
       e->pos++;
