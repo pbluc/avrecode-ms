@@ -30,9 +30,9 @@ struct cabac {
     explicit encoder(OutputIterator out) : e(out, (cabac_arithmetic_code::fixed_one/0x200)*0x1FE) {}
 
     // Translate CABAC tables into generic arithmetic coding.
-    void put(int symbol, uint8_t* state) {
+    size_t put(int symbol, uint8_t* state) {
       bool is_less_probable_symbol = (symbol != ((*state) & 1));
-      e.put(is_less_probable_symbol, [state](fixed_point range) {
+      size_t retval = e.put(is_less_probable_symbol, [state](fixed_point range) {
         // Find the normalizer such that range >> normalize is between 0x100 and 0x200.
         int normalize = log2(range / 0x100);
         // Use the most significant two bits of range (other than the leading 1) as an index into the table.
@@ -45,16 +45,17 @@ struct cabac {
       } else {
         *state = ff_h264_mlps_state[128 + *state];
       }
+      return retval;
     }
 
     // Simple implementation: put_bypass assumes a symbol probability of exactly 1/2.
-    void put_bypass(int symbol) {
-      e.put(symbol, [](fixed_point range) { return range/2; });
+    size_t put_bypass(int symbol) {
+      return e.put(symbol, [](fixed_point range) { return range/2; });
     }
 
     // The end of stream symbol is always assumed to have probability ~2/256.
-    void put_terminate(int end_of_stream_symbol) {
-      e.put(end_of_stream_symbol, [](fixed_point range) {
+    size_t put_terminate(int end_of_stream_symbol) {
+      size_t retval = e.put(end_of_stream_symbol, [](fixed_point range) {
         int normalize = log2(range / 0x100);
         return fixed_point(2) << normalize;
       });
@@ -62,6 +63,7 @@ struct cabac {
       if (end_of_stream_symbol) {
         e.finish();
       }
+      return retval;
     }
 
    private:
