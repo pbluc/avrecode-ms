@@ -732,10 +732,12 @@ class h264_model {
       int nonzero_bit1 = (meta.num_nonzeros[mb_coord.scan8_index] & 2) >> 1;
       int nonzero_bit2 = (meta.num_nonzeros[mb_coord.scan8_index] & 4) >> 2;
       int nonzero_bit3 = (meta.num_nonzeros[mb_coord.scan8_index] & 8) >> 3;
+#ifdef QUEUE_MODE
       put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[0]), &nonzero_bit0);
       put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[1]), &nonzero_bit1);
       put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[2]), &nonzero_bit2);
       put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[3]), &nonzero_bit3);
+#endif
       meta.num_nonzeros[mb_coord.scan8_index] = (nonzero_bit0);
       meta.num_nonzeros[mb_coord.scan8_index] |= (nonzero_bit1 << 1);
       meta.num_nonzeros[mb_coord.scan8_index] |= (nonzero_bit2 << 2);
@@ -763,10 +765,15 @@ class h264_model {
       coding_type = PIP_UNKNOWN;
   }
   bool begin_coding_type(CodingType ct, int zz_index, int param0, int param1) {
+
     bool begin_queueing = false;
     coding_type = ct;
     switch (ct) {
     case PIP_SIGNIFICANCE_MAP:
+      {
+          BlockMeta &meta = frames[cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y);
+          meta.num_nonzeros[mb_coord.scan8_index] = 0;
+      }
       assert(!zz_index);
       if (sub_mb_is_dc) {
         mb_coord.zigzag_index = 0;
@@ -930,11 +937,15 @@ class compressor {
 
     void execute_symbol(int symbol, const void* state) {
       h264_symbol sym(symbol, state);
+#ifdef QUEUE_MODE
       if (queueing_symbols == PIP_SIGNIFICANCE_MAP || queueing_symbols == PIP_SIGNIFICANCE_EOB) {
         symbol_buffer.push_back(sym);
       } else {
+#endif
         sym.execute(encoder, model, out, encoder_out);
+#ifdef QUEUE_MODE
       }
+#endif
     }
 
     int get(uint8_t *state) {
@@ -1225,7 +1236,7 @@ class decompressor {
 
     void begin_coding_type(
         CodingType ct, int zigzag_index, int param0, int param1) {
-      bool begin_queue = model->begin_coding_type(ct, zigzag_index, param0, param1);
+      bool begin_queue = model && model->begin_coding_type(ct, zigzag_index, param0, param1);
       if (begin_queue && ct) {
         model->finished_queueing(ct,
             [&](uint8_t *state, int *symbol) {
@@ -1240,6 +1251,9 @@ class decompressor {
       }
     }
     void end_coding_type(CodingType ct) {
+        if (!model) {
+            return;
+        }
       model->end_coding_type(ct);
     }
 
