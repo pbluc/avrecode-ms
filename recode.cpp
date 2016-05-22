@@ -602,6 +602,7 @@ class h264_model {
       return true;
   }
   model_key get_model_key(const void *context)const {
+      return model_key(context, 0, 0); //FIXME
       switch(coding_type) {
         case PIP_UNKNOWN:
         case PIP_UNREACHABLE:
@@ -787,6 +788,10 @@ class h264_model {
     }
     return begin_queueing;
   }
+  void reset_mb_significance_state_tracking() {
+      mb_coord.zigzag_index = 0;
+      coding_type = PIP_SIGNIFICANCE_MAP;
+  }
   void update_state_tracking(int symbol) {
     switch (coding_type) {
     case PIP_SIGNIFICANCE_MAP:
@@ -802,6 +807,7 @@ class h264_model {
           if (mb_coord.zigzag_index + 1 == sub_mb_size) {
               // if we were a zero and we haven't eob'd then the
               // next and last must be a one
+              frames[cur_frame].at(mb_coord.mb_x, mb_coord.mb_y).residual[mb_coord.scan8_index * 16 + mb_coord.zigzag_index] = 1;
               coding_type = PIP_UNREACHABLE;
               mb_coord.zigzag_index = 0;
           }
@@ -937,9 +943,11 @@ class compressor {
 
     void execute_symbol(int symbol, const void* state) {
       h264_symbol sym(symbol, state);
+#define QUEUE_MODE
 #ifdef QUEUE_MODE
       if (queueing_symbols == PIP_SIGNIFICANCE_MAP || queueing_symbols == PIP_SIGNIFICANCE_EOB) {
         symbol_buffer.push_back(sym);
+        model->update_state_tracking(symbol);
       } else {
 #endif
         sym.execute(encoder, model, out, encoder_out);
@@ -995,7 +1003,8 @@ class compressor {
         if (i++ < 10) {
         std::cerr << "FINISHED QUEUING DECODE: " << (int)(model->frames[model->cur_frame].meta_at(model->mb_coord.mb_x, model->mb_coord.mb_y).num_nonzeros[model->mb_coord.scan8_index]) << std::endl;
         }
-        pop_queueing_symbols();
+        pop_queueing_symbols(ct);
+        model->coding_type = PIP_UNKNOWN;
       }
     }
 
@@ -1012,8 +1021,13 @@ class compressor {
       queueing_symbols = PIP_UNKNOWN;
     }
 
-    void pop_queueing_symbols() {
+    void pop_queueing_symbols(CodingType ct) {
         //std::cerr<< "FINISHED QUEUEING "<< symbol_buffer.size()<<std::endl;
+      if (ct == PIP_SIGNIFICANCE_MAP || ct == PIP_SIGNIFICANCE_EOB) {
+        if (model) {
+          model->reset_mb_significance_state_tracking();
+        }
+      }
       for (auto &sym : symbol_buffer) {
         sym.execute(encoder, model, out, encoder_out);
       }
