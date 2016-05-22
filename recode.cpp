@@ -930,7 +930,7 @@ class compressor {
 
     void execute_symbol(int symbol, const void* state) {
       h264_symbol sym(symbol, state);
-      if (queueing_symbols != PIP_UNKNOWN) {
+      if (queueing_symbols == PIP_SIGNIFICANCE_MAP || queueing_symbols == PIP_SIGNIFICANCE_EOB) {
         symbol_buffer.push_back(sym);
       } else {
         sym.execute(encoder, model, out, encoder_out);
@@ -959,14 +959,14 @@ class compressor {
     void begin_coding_type(
         CodingType ct, int zigzag_index, int param0, int param1) {
       bool begin_queue = model->begin_coding_type(ct, zigzag_index, param0, param1);
-      if (begin_queue && ct) {
+      if (begin_queue && (ct == PIP_SIGNIFICANCE_MAP || ct == PIP_SIGNIFICANCE_EOB)) {
         push_queueing_symbols(ct);
       }
     }
     void end_coding_type(CodingType ct) {
       model->end_coding_type(ct);
 
-      if (queueing_symbols == ct) {
+      if ((ct == PIP_SIGNIFICANCE_MAP || ct == PIP_SIGNIFICANCE_EOB)) {
         stop_queueing_symbols();
         model->finished_queueing(ct,
             [&](uint8_t *state, int *symbol) {
@@ -996,6 +996,7 @@ class compressor {
     }
 
     void pop_queueing_symbols() {
+        std::cerr<< "FINISHED QUEUEING "<< symbol_buffer.size()<<std::endl;
       for (auto &sym : symbol_buffer) {
         sym.execute(encoder, model, out, encoder_out);
       }
