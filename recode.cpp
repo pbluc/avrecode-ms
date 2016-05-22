@@ -191,11 +191,15 @@ class av_decoder {
     }
     static void begin_coding_type(void *opaque, CodingType ct,
                                     int zigzag_index, int param0, int param1) {
-      auto *self = static_cast<typename Driver::cabac_decoder*>(opaque);
+      auto &cabac_contexts = static_cast<av_decoder*>(opaque)->cabac_contexts;
+      assert(cabac_contexts.size() == 1);
+      typename Driver::cabac_decoder*self = cabac_contexts.begin()->second.get();
       self->begin_coding_type(ct, zigzag_index, param0, param1);
     }
     static void end_coding_type(void *opaque, CodingType ct) {
-      auto *self = static_cast<typename Driver::cabac_decoder*>(opaque);
+      auto &cabac_contexts = static_cast<av_decoder*>(opaque)->cabac_contexts;
+      assert(cabac_contexts.size() == 1);
+      typename Driver::cabac_decoder*self = cabac_contexts.begin()->second.get();
       self->end_coding_type(ct);
     }
   };
@@ -902,6 +906,7 @@ class compressor {
    public:
     cabac_decoder(compressor *c, CABACContext *ctx_in, const uint8_t *buf, int size) {
       out = c->find_next_coded_block_and_emit_literal(buf, size);
+      model = nullptr;
       if (out == nullptr) {
         // We're skipping this block, so disable calls to our hooks.
         ctx_in->coding_hooks = nullptr;
@@ -925,7 +930,7 @@ class compressor {
 
     void execute_symbol(int symbol, const void* state) {
       h264_symbol sym(symbol, state);
-      if (queueing_symbols) {
+      if (queueing_symbols != PIP_UNKNOWN) {
         symbol_buffer.push_back(sym);
       } else {
         sym.execute(encoder, model, out, encoder_out);
@@ -961,7 +966,7 @@ class compressor {
     void end_coding_type(CodingType ct) {
       model->end_coding_type(ct);
 
-      if (queueing_symbols && queueing_symbols == ct) {
+      if (queueing_symbols == ct) {
         stop_queueing_symbols();
         model->finished_queueing(ct,
             [&](uint8_t *state, int *symbol) {
@@ -969,7 +974,10 @@ class compressor {
                    return model->probability_for_state(range, state);
                });
             });
-        std::cerr << "FINISHED QUEUING DECODE: " << model->frames[model->cur_frame].meta_at(model->mb_coord.mb_x, model->mb_coord.mb_y).num_nonzeros[model->mb_coord.scan8_index] << std::endl;
+        static int i = 0;
+        if (i++ < 10) {
+        std::cerr << "FINISHED QUEUING DECODE: " << (int)(model->frames[model->cur_frame].meta_at(model->mb_coord.mb_x, model->mb_coord.mb_y).num_nonzeros[model->mb_coord.scan8_index]) << std::endl;
+        }
         pop_queueing_symbols();
       }
     }
@@ -977,13 +985,13 @@ class compressor {
    private:
     void push_queueing_symbols(CodingType ct) {
       // Does not currently support nested queues.
-      assert (!queueing_symbols);
+      assert (queueing_symbols == PIP_UNKNOWN);
       assert (symbol_buffer.empty());
       queueing_symbols = ct;
     }
 
     void stop_queueing_symbols() {
-      assert (queueing_symbols);
+      assert (queueing_symbols != PIP_UNKNOWN);
       queueing_symbols = PIP_UNKNOWN;
     }
 
@@ -1003,7 +1011,7 @@ class compressor {
     recoded_code::encoder<std::back_insert_iterator<std::vector<uint8_t>>, uint8_t> encoder{
       std::back_inserter(encoder_out)};
 
-    bool queueing_symbols = false;
+    CodingType queueing_symbols = PIP_UNKNOWN;
     std::vector<h264_symbol> symbol_buffer;
   };
   h264_model *get_model() {
@@ -1154,6 +1162,8 @@ class decompressor {
       index = d->recognize_coded_block(buf, size);
       block = &d->in.block(index);
       out = &d->blocks[index];
+      model = nullptr;
+
       if (block->has_cabac()) {
         model = &d->model;
         model->reset();
@@ -1216,7 +1226,10 @@ class decompressor {
                    return model->probability_for_state(range, state);
                });
             });
-        std::cerr << "FINISHED QUEUING RECODE: " << model->frames[model->cur_frame].meta_at(model->mb_coord.mb_x, model->mb_coord.mb_y).num_nonzeros[model->mb_coord.scan8_index] << std::endl;
+        static int i = 0;
+        if (i++ < 10) {
+          std::cerr << "FINISHED QUEUING RECODE: " << model->frames[model->cur_frame].meta_at(model->mb_coord.mb_x, model->mb_coord.mb_y).num_nonzeros[model->mb_coord.scan8_index] << std::endl;
+        }
       }
     }
     void end_coding_type(CodingType ct) {
