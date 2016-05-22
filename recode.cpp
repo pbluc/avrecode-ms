@@ -853,7 +853,7 @@ public:
 
   template <class T>
   void execute(T &encoder, h264_model *model,
-      Recoded::Block *out, std::vector<uint8_t> encoder_out) {
+      Recoded::Block *out, std::vector<uint8_t> &encoder_out) {
     size_t billable_bytes = encoder.put(symbol, [&](range_t range){
         return model->probability_for_state(range, state); });
     if (billable_bytes) {
@@ -958,12 +958,18 @@ class compressor {
 
     void begin_coding_type(
         CodingType ct, int zigzag_index, int param0, int param1) {
+      if (!model) {
+          return;
+      }
       bool begin_queue = model->begin_coding_type(ct, zigzag_index, param0, param1);
       if (begin_queue && (ct == PIP_SIGNIFICANCE_MAP || ct == PIP_SIGNIFICANCE_EOB)) {
         push_queueing_symbols(ct);
       }
     }
     void end_coding_type(CodingType ct) {
+      if (!model) {
+          return;
+      }
       model->end_coding_type(ct);
 
       if ((ct == PIP_SIGNIFICANCE_MAP || ct == PIP_SIGNIFICANCE_EOB)) {
@@ -996,7 +1002,7 @@ class compressor {
     }
 
     void pop_queueing_symbols() {
-        std::cerr<< "FINISHED QUEUEING "<< symbol_buffer.size()<<std::endl;
+        //std::cerr<< "FINISHED QUEUEING "<< symbol_buffer.size()<<std::endl;
       for (auto &sym : symbol_buffer) {
         sym.execute(encoder, model, out, encoder_out);
       }
