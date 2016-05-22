@@ -728,11 +728,14 @@ class h264_model {
   void finished_queueing(CodingType ct, const Functor &put_or_get) {
 
     if (ct == PIP_SIGNIFICANCE_MAP) {
+      CodingType last = coding_type;
+      coding_type = PIP_SIGNIFICANCE_NZ;
       BlockMeta &meta = frames[cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y);
       int nonzero_bit0 = meta.num_nonzeros[mb_coord.scan8_index] & 1;
       int nonzero_bit1 = (meta.num_nonzeros[mb_coord.scan8_index] & 2) >> 1;
       int nonzero_bit2 = (meta.num_nonzeros[mb_coord.scan8_index] & 4) >> 2;
       int nonzero_bit3 = (meta.num_nonzeros[mb_coord.scan8_index] & 8) >> 3;
+
 #ifdef QUEUE_MODE
       put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[0]), &nonzero_bit0);
       put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[1]), &nonzero_bit1);
@@ -743,6 +746,7 @@ class h264_model {
       meta.num_nonzeros[mb_coord.scan8_index] |= (nonzero_bit1 << 1);
       meta.num_nonzeros[mb_coord.scan8_index] |= (nonzero_bit2 << 2);
       meta.num_nonzeros[mb_coord.scan8_index] |= (nonzero_bit3 << 3);
+      coding_type = last;
     }
   }
   void end_coding_type(CodingType ct) {
@@ -794,6 +798,8 @@ class h264_model {
   }
   void update_state_tracking(int symbol) {
     switch (coding_type) {
+    case PIP_SIGNIFICANCE_NZ:
+      break;
     case PIP_SIGNIFICANCE_MAP:
       frames[cur_frame].at(mb_coord.mb_x, mb_coord.mb_y).residual[mb_coord.scan8_index * 16 + mb_coord.zigzag_index] = symbol;
       if (mb_coord.zigzag_index + 1 == sub_mb_size) {
@@ -1260,7 +1266,7 @@ class decompressor {
             });
         static int i = 0;
         if (i++ < 10) {
-          std::cerr << "FINISHED QUEUING RECODE: " << model->frames[model->cur_frame].meta_at(model->mb_coord.mb_x, model->mb_coord.mb_y).num_nonzeros[model->mb_coord.scan8_index] << std::endl;
+          std::cerr << "FINISHED QUEUING RECODE: " << (int)model->frames[model->cur_frame].meta_at(model->mb_coord.mb_x, model->mb_coord.mb_y).num_nonzeros[model->mb_coord.scan8_index] << std::endl;
         }
       }
     }
