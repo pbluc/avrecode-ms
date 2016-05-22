@@ -189,13 +189,13 @@ class av_decoder {
       self->sub_mb_is_dc = 0;
       self->sub_mb_chroma422 = 0;
     }
-      static void begin_coding_type(void *opaque, CodingType ct,
+    static void begin_coding_type(void *opaque, CodingType ct,
                                     int zigzag_index, int param0, int param1) {
-      auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
+      auto *self = static_cast<typename Driver::cabac_decoder*>(opaque);
       self->begin_coding_type(ct, zigzag_index, param0, param1);
     }
     static void end_coding_type(void *opaque, CodingType ct) {
-      auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
+      auto *self = static_cast<typename Driver::cabac_decoder*>(opaque);
       self->end_coding_type(ct);
     }
   };
@@ -545,14 +545,17 @@ bool get_neighbor_coefficient(bool above,
 }
 
 class h264_model {
+  public:
   CodingType coding_type = PIP_UNKNOWN;
   FrameBuffer frames[2];
   int cur_frame = 0;
+  uint8_t STATE_FOR_NUM_NONZERO_BIT[4];
  public:
   h264_model() { reset(); }
 
   void reset() {
       // reset should do nothing as we wish to remember what we've learned
+    memset(STATE_FOR_NUM_NONZERO_BIT, 0, sizeof(STATE_FOR_NUM_NONZERO_BIT));
   }
   bool fetch(bool previous, bool match_type, CoefficientCoord coord, int16_t*output) const{
       if (match_type && (previous || coord.mb_x != mb_coord.mb_x || coord.mb_y != mb_coord.mb_y)) {
@@ -684,6 +687,25 @@ class h264_model {
       frames[cur_frame].set_frame_num(frame_num);
     }
   }
+  template <class Functor>
+  void finished_queueing(CodingType ct, const Functor &put_or_get) {
+
+    if (ct == PIP_SIGNIFICANCE_MAP) {
+      BlockMeta &meta = frames[cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y);
+      int nonzero_bit0 = meta.num_nonzeros[mb_coord.scan8_index] & 1;
+      int nonzero_bit1 = (meta.num_nonzeros[mb_coord.scan8_index] & 2) >> 1;
+      int nonzero_bit2 = (meta.num_nonzeros[mb_coord.scan8_index] & 4) >> 2;
+      int nonzero_bit3 = (meta.num_nonzeros[mb_coord.scan8_index] & 8) >> 3;
+      put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[0]), &nonzero_bit0);
+      put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[1]), &nonzero_bit1);
+      put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[2]), &nonzero_bit2);
+      put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[3]), &nonzero_bit3);
+      meta.num_nonzeros[mb_coord.scan8_index] = (nonzero_bit0);
+      meta.num_nonzeros[mb_coord.scan8_index] |= (nonzero_bit1 << 1);
+      meta.num_nonzeros[mb_coord.scan8_index] |= (nonzero_bit2 << 2);
+      meta.num_nonzeros[mb_coord.scan8_index] |= (nonzero_bit3 << 3);
+    }
+  }
   void end_coding_type(CodingType ct) {
       if (ct == PIP_SIGNIFICANCE_MAP) {
         assert(coding_type == PIP_UNREACHABLE
@@ -704,7 +726,8 @@ class h264_model {
       }
       coding_type = PIP_UNKNOWN;
   }
-  void begin_coding_type(CodingType ct, int zz_index, int param0, int param1) {
+  bool begin_coding_type(CodingType ct, int zz_index, int param0, int param1) {
+    bool begin_queueing = false;
     coding_type = ct;
     switch (ct) {
     case PIP_SIGNIFICANCE_MAP:
@@ -714,10 +737,12 @@ class h264_model {
       } else {
         mb_coord.zigzag_index = 0;
       }
+      begin_queueing = true;
       break;
     default:
       break;
     }
+    return begin_queueing;
   }
   void update_state_tracking(int symbol) {
     switch (coding_type) {
@@ -782,6 +807,27 @@ class h264_model {
   std::map<model_key, estimator> estimators;
 };
 
+class h264_symbol {
+public:
+  h264_symbol(int symbol, const void*state)
+    : symbol(symbol), state(state) {
+  }
+
+  template <class T>
+  void execute(T &encoder, h264_model *model,
+      Recoded::Block *out, std::vector<uint8_t> encoder_out) {
+    encoder.put(symbol, [&](range_t range){
+        return model->probability_for_state(range, state); });
+    model->update_state(symbol, state);
+    if (state == &model->terminate_context && symbol) {
+      encoder.finish();
+      out->set_cabac(&encoder_out[0], encoder_out.size());
+    }
+  }
+private:
+  int symbol;
+  const void* state;
+};
 
 class compressor {
  public:
@@ -834,53 +880,101 @@ class compressor {
       ctx.coding_hooks_opaque = nullptr;
       ::ff_reset_cabac_decoder(&ctx, buf, size);
 
+      this->c = c;
       model = &c->model;
       model->reset();
     }
     ~cabac_decoder() { assert(out == nullptr || out->has_cabac()); }
 
+    void execute_symbol(int symbol, const void* state) {
+      h264_symbol sym(symbol, state);
+      if (queueing_symbols) {
+        symbol_buffer.push_back(sym);
+      } else {
+        sym.execute(encoder, model, out, encoder_out);
+      }
+    }
+
     int get(uint8_t *state) {
       int symbol = ::ff_get_cabac(&ctx, state);
-      encoder.put(symbol, [&](range_t range){
-          return model->probability_for_state(range, state); });
-      model->update_state(symbol, state);
+      execute_symbol(symbol, state);
       return symbol;
     }
 
     int get_bypass() {
       int symbol = ::ff_get_cabac_bypass(&ctx);
-      encoder.put(symbol, [&](range_t range){
-          return model->probability_for_state(range, &model->bypass_context); });
-      model->update_state(symbol, &model->bypass_context);
+      execute_symbol(symbol, &model->bypass_context);
       return symbol;
     }
 
     int get_terminate() {
       int n = ::ff_get_cabac_terminate(&ctx);
       int symbol = (n != 0);
-      encoder.put(symbol, [&](range_t range){
-          return model->probability_for_state(range, &model->terminate_context); });
-      model->update_state(symbol, &model->terminate_context);
-      if (symbol) {
-        encoder.finish();
-        out->set_cabac(&encoder_out[0], encoder_out.size());
-      }
+      execute_symbol(symbol, &model->terminate_context);
       return symbol;
     }
+
+    void begin_coding_type(
+        CodingType ct, int zigzag_index, int param0, int param1) {
+      bool begin_queue = model->begin_coding_type(ct, zigzag_index, param0, param1);
+      if (begin_queue && ct) {
+        push_queueing_symbols(ct);
+      }
+    }
+    void end_coding_type(CodingType ct) {
+      model->end_coding_type(ct);
+
+      if (queueing_symbols && queueing_symbols == ct) {
+        stop_queueing_symbols();
+        model->finished_queueing(ct,
+            [&](uint8_t *state, int *symbol) {
+               encoder.put(*symbol, [&](range_t range){
+                   return model->probability_for_state(range, state);
+               });
+            });
+        std::cerr << "FINISHED QUEUING DECODE: " << model->frames[model->cur_frame].meta_at(model->mb_coord.mb_x, model->mb_coord.mb_y).num_nonzeros[model->mb_coord.scan8_index] << std::endl;
+        pop_queueing_symbols();
+      }
+    }
+
    private:
+    void push_queueing_symbols(CodingType ct) {
+      // Does not currently support nested queues.
+      assert (!queueing_symbols);
+      assert (symbol_buffer.empty());
+      queueing_symbols = ct;
+    }
+
+    void stop_queueing_symbols() {
+      assert (queueing_symbols);
+      queueing_symbols = PIP_UNKNOWN;
+    }
+
+    void pop_queueing_symbols() {
+      for (auto &sym : symbol_buffer) {
+        sym.execute(encoder, model, out, encoder_out);
+      }
+      symbol_buffer.clear();
+    }
+
     Recoded::Block *out;
     CABACContext ctx;
 
+    compressor *c;
     h264_model *model;
     std::vector<uint8_t> encoder_out;
     recoded_code::encoder<std::back_insert_iterator<std::vector<uint8_t>>, uint8_t> encoder{
       std::back_inserter(encoder_out)};
+
+    bool queueing_symbols = false;
+    std::vector<h264_symbol> symbol_buffer;
   };
   h264_model *get_model() {
     return &model;
   }
 
  private:
+
   Recoded::Block* find_next_coded_block_and_emit_literal(const uint8_t *buf, int size) {
     uint8_t *found = static_cast<uint8_t*>( memmem(
         &original_bytes[prev_coded_block_end], read_offset - prev_coded_block_end,
@@ -1064,6 +1158,23 @@ class decompressor {
         finish();
       }
       return symbol;
+    }
+
+    void begin_coding_type(
+        CodingType ct, int zigzag_index, int param0, int param1) {
+      bool begin_queue = model->begin_coding_type(ct, zigzag_index, param0, param1);
+      if (begin_queue && ct) {
+        model->finished_queueing(ct,
+            [&](uint8_t *state, int *symbol) {
+               *symbol = decoder->get([&](range_t range){
+                   return model->probability_for_state(range, state);
+               });
+            });
+        std::cerr << "FINISHED QUEUING RECODE: " << model->frames[model->cur_frame].meta_at(model->mb_coord.mb_x, model->mb_coord.mb_y).num_nonzeros[model->mb_coord.scan8_index] << std::endl;
+      }
+    }
+    void end_coding_type(CodingType ct) {
+      model->end_coding_type(ct);
     }
 
    private:
