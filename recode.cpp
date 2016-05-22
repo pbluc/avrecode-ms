@@ -602,7 +602,6 @@ class h264_model {
       return true;
   }
   model_key get_model_key(const void *context)const {
-      return model_key(context, 0, 0); //FIXME
       switch(coding_type) {
         case PIP_UNKNOWN:
         case PIP_UNREACHABLE:
@@ -690,8 +689,8 @@ class h264_model {
         case PIP_SIGNIFICANCE_EOB:
           {
             // FIXME: why doesn't this prior help at all
-            //const BlockMeta &meta = frames[!cur_frame].meta_at(mb_x, mb_y);
-            return model_key(context, 0/*meta.num_nonzeros[sub_mb_index]*/, 0);//;
+            const BlockMeta &meta = frames[!cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y);
+            return model_key(context, meta.num_nonzeros[mb_coord.scan8_index], 0);//;
           }
         default:
           break;
