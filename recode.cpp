@@ -691,8 +691,10 @@ class h264_model {
         case PIP_SIGNIFICANCE_EOB:
           {
             // FIXME: why doesn't this prior help at all
-            const BlockMeta &meta = frames[!cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y);
-            return model_key(context, meta.num_nonzeros[mb_coord.scan8_index], 0);//;
+            static int fake_context = 0;
+            int num_nonzeros = frames[cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y).num_nonzeros[mb_coord.scan8_index];
+            
+            return model_key(&fake_context, num_nonzeros == nonzeros_observed, 0);
           }
         default:
           break;
@@ -781,6 +783,7 @@ class h264_model {
           meta.num_nonzeros[mb_coord.scan8_index] = 0;
       }
       assert(!zz_index);
+      nonzeros_observed = 0;
       if (sub_mb_is_dc) {
         mb_coord.zigzag_index = 0;
       } else {
@@ -795,6 +798,7 @@ class h264_model {
   }
   void reset_mb_significance_state_tracking() {
       mb_coord.zigzag_index = 0;
+      nonzeros_observed = 0;
       coding_type = PIP_SIGNIFICANCE_MAP;
   }
   void update_state_tracking(int symbol) {
@@ -803,6 +807,7 @@ class h264_model {
       break;
     case PIP_SIGNIFICANCE_MAP:
       frames[cur_frame].at(mb_coord.mb_x, mb_coord.mb_y).residual[mb_coord.scan8_index * 16 + mb_coord.zigzag_index] = symbol;
+      nonzeros_observed += symbol;
       if (mb_coord.zigzag_index + 1 == sub_mb_size) {
         coding_type = PIP_UNREACHABLE;
         mb_coord.zigzag_index = 0;
@@ -815,6 +820,7 @@ class h264_model {
               // if we were a zero and we haven't eob'd then the
               // next and last must be a one
               frames[cur_frame].at(mb_coord.mb_x, mb_coord.mb_y).residual[mb_coord.scan8_index * 16 + mb_coord.zigzag_index] = 1;
+              ++nonzeros_observed;
               coding_type = PIP_UNREACHABLE;
               mb_coord.zigzag_index = 0;
           }
@@ -856,6 +862,7 @@ class h264_model {
 
   const uint8_t bypass_context = 0, terminate_context = 0, significance_context = 0;
   CoefficientCoord mb_coord;
+  int nonzeros_observed = 0;
   int sub_mb_cat = -1;
   int sub_mb_size = -1;
   int sub_mb_is_dc = 0;
