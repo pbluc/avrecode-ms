@@ -603,6 +603,8 @@ class h264_model {
   }
   model_key get_model_key(const void *context)const {
       switch(coding_type) {
+        case PIP_SIGNIFICANCE_NZ:
+          return model_key(context, 0, 0);
         case PIP_UNKNOWN:
         case PIP_UNREACHABLE:
         case PIP_RESIDUALS:
@@ -734,7 +736,7 @@ class h264_model {
       int nonzero_bit1 = (meta.num_nonzeros[mb_coord.scan8_index] & 2) >> 1;
       int nonzero_bit2 = (meta.num_nonzeros[mb_coord.scan8_index] & 4) >> 2;
       int nonzero_bit3 = (meta.num_nonzeros[mb_coord.scan8_index] & 8) >> 3;
-
+#define QUEUE_MODE
 #ifdef QUEUE_MODE
       put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[0]), &nonzero_bit0);
       put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[1]), &nonzero_bit1);
@@ -763,7 +765,7 @@ class h264_model {
         BlockMeta &meta = frames[cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y);
         meta.is_8x8 = meta.is_8x8 || (sub_mb_size > 32); // 8x8 will have DC be 2x2
         meta.coded = true;
-        assert(meta.num_nonzeros[mb_coord.scan8_index] == 0);
+        assert(meta.num_nonzeros[mb_coord.scan8_index] == 0 || meta.num_nonzeros[mb_coord.scan8_index] == num_nonzeros);
         meta.num_nonzeros[mb_coord.scan8_index] = num_nonzeros;
       }
       coding_type = PIP_UNKNOWN;
@@ -950,7 +952,7 @@ class compressor {
       h264_symbol sym(symbol, state);
 #define QUEUE_MODE
 #ifdef QUEUE_MODE
-      if (queueing_symbols == PIP_SIGNIFICANCE_MAP || queueing_symbols == PIP_SIGNIFICANCE_EOB) {
+      if (queueing_symbols == PIP_SIGNIFICANCE_MAP || queueing_symbols == PIP_SIGNIFICANCE_EOB || !symbol_buffer.empty()) {
         symbol_buffer.push_back(sym);
         model->update_state_tracking(symbol);
       } else {
