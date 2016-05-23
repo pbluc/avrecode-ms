@@ -703,10 +703,13 @@ class h264_model {
       assert(false && "Unreachable");
       abort();
   }
-  range_t probability_for_state(range_t range, const void *context) {
-    auto* e = &estimators[get_model_key(context)];
+  range_t probability_for_model_key(range_t range, model_key key) {
+    auto* e = &estimators[key];
     int total = e->pos + e->neg;
     return (range/total) * e->pos;
+  }
+  range_t probability_for_state(range_t range, const void *context) {
+    return probability_for_model_key(range, get_model_key(context));
   }
   void update_frame_spec(int frame_num, int mb_width, int mb_height) {
     if (frames[cur_frame].width() != (uint32_t)mb_width
@@ -745,7 +748,7 @@ class h264_model {
       {
           uint32_t i = serialized_bits;
           do {
-              put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[i]), &nonzero_bits[i]);
+              put_or_get(model_key(&(STATE_FOR_NUM_NONZERO_BIT[i]), 0 ,0), &nonzero_bits[i]);
           } while (i-- > 0);
       }
 #endif
@@ -853,11 +856,14 @@ class h264_model {
     }
   }
   void update_state(int symbol, const void *context) {
+      update_state_for_model_key(symbol, get_model_key(context));
+  }
+  void update_state_for_model_key(int symbol, model_key key) {
     if (coding_type == PIP_SIGNIFICANCE_EOB) {
         int num_nonzeros = frames[cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y).num_nonzeros[mb_coord.scan8_index];
         assert(symbol == (num_nonzeros == nonzeros_observed));
     }
-    auto* e = &estimators[get_model_key(context)];
+    auto* e = &estimators[key];
     if (symbol) {
       e->pos++;
     } else {
@@ -1021,10 +1027,11 @@ class compressor {
       if ((ct == PIP_SIGNIFICANCE_MAP || ct == PIP_SIGNIFICANCE_EOB)) {
         stop_queueing_symbols();
         model->finished_queueing(ct,
-            [&](uint8_t *state, int *symbol) {
+               [&](model_key key, int*symbol) {
                size_t billable_bytes = encoder.put(*symbol, [&](range_t range){
-                   return model->probability_for_state(range, state);
+                   return model->probability_for_model_key(range, key);
                });
+               model->update_state_for_model_key(*symbol, key);
                if (billable_bytes) {
                    model->billable_bytes(billable_bytes);
                }
@@ -1288,10 +1295,11 @@ class decompressor {
       bool begin_queue = model && model->begin_coding_type(ct, zigzag_index, param0, param1);
       if (begin_queue && ct) {
         model->finished_queueing(ct,
-            [&](uint8_t *state, int *symbol) {
+              [&](model_key key, int * symbol) {
                *symbol = decoder->get([&](range_t range){
-                   return model->probability_for_state(range, state);
+                   return model->probability_for_model_key(range, key);
                });
+               model->update_state_for_model_key(*symbol, key);
             });
         static int i = 0;
         if (i++ < 10) {
