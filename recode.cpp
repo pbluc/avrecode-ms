@@ -747,8 +747,10 @@ class h264_model {
       const uint32_t serialized_bits = sub_mb_size > 16 ? 6 : sub_mb_size > 4 ? 4 : 2;
       {
           uint32_t i = serialized_bits;
+          uint32_t serialized_so_far = 0;
           do {
-              put_or_get(model_key(&(STATE_FOR_NUM_NONZERO_BIT[i]), 0 ,0), &nonzero_bits[i]);
+              put_or_get(model_key(&(STATE_FOR_NUM_NONZERO_BIT[i]), serialized_so_far, meta.is_8x8 + sub_mb_is_dc * 2 + sub_mb_chroma422 + sub_mb_cat * 4), &nonzero_bits[i]);
+              serialized_so_far |= (nonzero_bits[i] << i);
           } while (i-- > 0);
       }
 #endif
