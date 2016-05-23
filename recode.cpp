@@ -749,7 +749,7 @@ class h264_model {
           uint32_t i = 0;
           uint32_t serialized_so_far = 0;
           do {
-              cur_bit = (1<<i);
+              uint32_t cur_bit = (1<<i);
               put_or_get(model_key(&(STATE_FOR_NUM_NONZERO_BIT[i]), serialized_so_far + 64 * (frames[!cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y).num_nonzeros[mb_coord.scan8_index] > cur_bit), meta.is_8x8 + sub_mb_is_dc * 2 + sub_mb_chroma422 + sub_mb_cat * 4), &nonzero_bits[i]);
               if (nonzero_bits[i]) {
                   serialized_so_far |= cur_bit;
