@@ -557,7 +557,7 @@ class h264_model {
   size_t cabac_bill[sizeof(billing_names)/sizeof(billing_names[0])];
   FrameBuffer frames[2];
   int cur_frame = 0;
-  uint8_t STATE_FOR_NUM_NONZERO_BIT[4];
+  uint8_t STATE_FOR_NUM_NONZERO_BIT[6];
  public:
   h264_model() { reset(); memset(bill, 0, sizeof(bill)); memset(cabac_bill, 0, sizeof(cabac_bill));}
   ~h264_model() {
@@ -735,21 +735,24 @@ class h264_model {
       CodingType last = coding_type;
       coding_type = PIP_SIGNIFICANCE_NZ;
       BlockMeta &meta = frames[cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y);
-      int nonzero_bit0 = meta.num_nonzeros[mb_coord.scan8_index] & 1;
-      int nonzero_bit1 = (meta.num_nonzeros[mb_coord.scan8_index] & 2) >> 1;
-      int nonzero_bit2 = (meta.num_nonzeros[mb_coord.scan8_index] & 4) >> 2;
-      int nonzero_bit3 = (meta.num_nonzeros[mb_coord.scan8_index] & 8) >> 3;
+      int nonzero_bits[6] = {};
+      for (int i= 0; i < 6; ++i) {
+          nonzero_bits[i] = (meta.num_nonzeros[mb_coord.scan8_index] & (1 << i)) >> i;
+      }
 #define QUEUE_MODE
 #ifdef QUEUE_MODE
-      put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[0]), &nonzero_bit0);
-      put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[1]), &nonzero_bit1);
-      put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[2]), &nonzero_bit2);
-      put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[3]), &nonzero_bit3);
+      const uint32_t serialized_bits = sub_mb_size > 16 ? 6 : sub_mb_size > 4 ? 4 : 2;
+      {
+          uint32_t i = serialized_bits;
+          do {
+              put_or_get(&(STATE_FOR_NUM_NONZERO_BIT[i]), &nonzero_bits[i]);
+          } while (i-- > 0);
+      }
 #endif
-      meta.num_nonzeros[mb_coord.scan8_index] = (nonzero_bit0);
-      meta.num_nonzeros[mb_coord.scan8_index] |= (nonzero_bit1 << 1);
-      meta.num_nonzeros[mb_coord.scan8_index] |= (nonzero_bit2 << 2);
-      meta.num_nonzeros[mb_coord.scan8_index] |= (nonzero_bit3 << 3);
+      meta.num_nonzeros[mb_coord.scan8_index] = 0;
+      for (int i= 0; i < 6; ++i) {
+          meta.num_nonzeros[mb_coord.scan8_index] |= nonzero_bits[i] << i;
+      }
       coding_type = last;
     }
   }
