@@ -1247,11 +1247,11 @@ class decompressor {
         symbol = decoder->get([&](range_t range){
            return model->probability_for_state(range, state); });
       }
-      model->update_state(symbol, state);
       size_t billable_bytes = cabac_encoder.put(symbol, state);
       if (billable_bytes) {
           model->billable_cabac_bytes(billable_bytes);
       }
+      model->update_state(symbol, state);
       return symbol;
     }
 
