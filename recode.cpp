@@ -412,6 +412,67 @@ struct CoefficientCoord {
     int zigzag_index;
 };
 
+bool get_neighbor_sub_mb(bool above, int sub_mb_size,
+                  CoefficientCoord input,
+                  CoefficientCoord *output) {
+    int mb_x = input.mb_x;
+    int mb_y = input.mb_y;
+    int scan8_index = input.scan8_index;
+    output->scan8_index = scan8_index;
+    output->mb_x = mb_x;
+    output->mb_y = mb_y;
+    output->zigzag_index = input.zigzag_index;
+    int dimension = 2;
+    if (sub_mb_size > 15) {
+        dimension = 4;
+    }
+    if (sub_mb_size > 32) {
+        dimension = 8;
+    }
+    if (scan8_index >= 16 * 3) {
+        if (above) {
+            if (mb_y > 0) {
+                output->mb_y -= 1;
+                return true;
+            }
+            return false;
+        } else {
+            if (mb_x > 0) {
+                output->mb_x -= 1;
+                return true;
+            }
+            return false;
+        }
+    }
+    int scan8 = scan_8[scan8_index];
+    int left_shift = (above ? 0 : -1);
+    int above_shift = (above ? -1 : 0);
+    auto neighbor = reverse_scan_8[(scan8 >> 3) + left_shift][(scan8 & 7) + above_shift];
+    if (neighbor.neighbor_left) {
+        if (mb_x == 0){
+            return false;
+        } else {
+            --mb_x;
+        }
+    }
+    if (neighbor.neighbor_up) {
+        if (mb_y == 0) {
+            return false;
+        } else {
+            --mb_y;
+        }
+    }
+    output->scan8_index = neighbor.scan8_index;
+    if (sub_mb_size >= 32) {
+        output->scan8_index /= 4;
+        output->scan8_index *= 4; // round down to the nearest multiple of 4
+    }
+    output->zigzag_index = input.zigzag_index;
+    output->mb_x = mb_x;
+    output->mb_y = mb_y;
+    return true;
+}
+
 bool get_neighbor(bool above, int sub_mb_size,
                   CoefficientCoord input,
                   CoefficientCoord *output) {
@@ -628,8 +689,7 @@ class h264_model {
                   assert(mb_coord.zigzag_index < 7);
                   zigzag_offset = sig_coeff_offset_dc[mb_coord.zigzag_index];
               } else {
-                  if (sub_mb_size > 32) {
-                      assert(mb_coord.zigzag_index < 63);
+                  if (sub_mb_size > 32) {                      assert(mb_coord.zigzag_index < 63);
                       zigzag_offset = sig_coeff_flag_offset_8x8[0][mb_coord.zigzag_index];
                   }
               }
@@ -748,9 +808,29 @@ class h264_model {
       {
           uint32_t i = 0;
           uint32_t serialized_so_far = 0;
+          CoefficientCoord neighbor;
+          uint32_t left_nonzero = 0;
+          uint32_t above_nonzero = 0;
+          bool has_left = get_neighbor_sub_mb(false, sub_mb_size, mb_coord, &neighbor);
+          if (has_left) {
+              left_nonzero = frames[cur_frame].meta_at(neighbor.mb_x, neighbor.mb_y).num_nonzeros[neighbor.scan8_index];
+          }
+          bool has_above = get_neighbor_sub_mb(true, sub_mb_size, mb_coord, &neighbor);
+          if (has_above) {
+              above_nonzero = frames[cur_frame].meta_at(neighbor.mb_x, neighbor.mb_y).num_nonzeros[neighbor.scan8_index];
+          }
+          
           do {
               uint32_t cur_bit = (1<<i);
-              put_or_get(model_key(&(STATE_FOR_NUM_NONZERO_BIT[i]), serialized_so_far + 64 * (frames[!cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y).num_nonzeros[mb_coord.scan8_index] > cur_bit), meta.is_8x8 + sub_mb_is_dc * 2 + sub_mb_chroma422 + sub_mb_cat * 4), &nonzero_bits[i]);
+              int left_nonzero_bit = 2;
+              if (has_left) {
+                  left_nonzero_bit = (left_nonzero >= cur_bit);
+              }
+              int above_nonzero_bit = 2;
+              if (above_nonzero) {
+                  above_nonzero_bit = (above_nonzero >= cur_bit);
+              }
+              put_or_get(model_key(&(STATE_FOR_NUM_NONZERO_BIT[i]), serialized_so_far + 64 * (frames[!cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y).num_nonzeros[mb_coord.scan8_index] >= cur_bit) + 128 * left_nonzero_bit + 384 * above_nonzero_bit, meta.is_8x8 + sub_mb_is_dc * 2 + sub_mb_chroma422 + sub_mb_cat * 4), &nonzero_bits[i]);
               if (nonzero_bits[i]) {
                   serialized_so_far |= cur_bit;
               }
