@@ -422,13 +422,6 @@ bool get_neighbor_sub_mb(bool above, int sub_mb_size,
     output->mb_x = mb_x;
     output->mb_y = mb_y;
     output->zigzag_index = input.zigzag_index;
-    int dimension = 2;
-    if (sub_mb_size > 15) {
-        dimension = 4;
-    }
-    if (sub_mb_size > 32) {
-        dimension = 8;
-    }
     if (scan8_index >= 16 * 3) {
         if (above) {
             if (mb_y > 0) {
@@ -472,7 +465,14 @@ bool get_neighbor_sub_mb(bool above, int sub_mb_size,
     output->mb_y = mb_y;
     return true;
 }
-
+int log2(int y) {
+    int x = -1;
+    while (y) {
+        y/=2;
+        x++;
+    }
+    return x;
+}
 bool get_neighbor(bool above, int sub_mb_size,
                   CoefficientCoord input,
                   CoefficientCoord *output) {
@@ -745,8 +745,12 @@ class h264_model {
               // FIXM: why doesn't this prior help at all
               //const BlockMeta &meta = frames[!cur_frame].meta_at(mb_x, mb_y);
               int num_nonzeros = frames[cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y).num_nonzeros[mb_coord.scan8_index];
+              (void)neighbor_above;
+              (void)neighbor_left;
+              (void)coeff_neighbor_above;
+              (void)coeff_neighbor_left;//haven't found a good way to utilize these priors to make the results better
               return model_key(&significance_context,
-                               256 * num_nonzeros + neighbor_left + 4 * neighbor_above + 16 * coeff_neighbor_left + 64 * coeff_neighbor_above,
+                               64 * num_nonzeros + nonzeros_observed,
                                sub_mb_is_dc + zigzag_offset * 2 + 16 * 2 * cat_lookup[sub_mb_cat]);
           }
         case PIP_SIGNIFICANCE_EOB:
