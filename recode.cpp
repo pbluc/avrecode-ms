@@ -444,7 +444,7 @@ bool get_neighbor_sub_mb(bool above, int sub_mb_size,
     int scan8 = scan_8[scan8_index];
     int left_shift = (above ? 0 : -1);
     int above_shift = (above ? -1 : 0);
-    auto neighbor = reverse_scan_8[(scan8 >> 3) + left_shift][(scan8 & 7) + above_shift];
+    auto neighbor = reverse_scan_8[(scan8 >> 3) + above_shift][(scan8 & 7) + left_shift];
     if (neighbor.neighbor_left) {
         if (mb_x == 0){
             return false;
@@ -542,7 +542,7 @@ bool get_neighbor(bool above, int sub_mb_size,
     int scan8 = scan_8[scan8_index];
     int left_shift = (above ? 0 : -1);
     int above_shift = (above ? -1 : 0);
-    auto neighbor = reverse_scan_8[(scan8 >> 3) + left_shift][(scan8 & 7) + above_shift];
+    auto neighbor = reverse_scan_8[(scan8 >> 3) + above_shift][(scan8 & 7) + left_shift];
     if (neighbor.neighbor_left) {
         if (mb_x == 0){
             return false;
@@ -709,7 +709,9 @@ class h264_model {
               int neighbor_left = 2;
               int coeff_neighbor_above = 2;
               int coeff_neighbor_left = 2;
-              if (do_print) LOG_NEIGHBORS("[");
+              if (do_print) {
+                  LOG_NEIGHBORS("[");
+              }
               {
                   CoefficientCoord neighbor_left_coord = {0, 0, 0, 0};
                   if (get_neighbor(false, sub_mb_size, mb_coord, &neighbor_left_coord)) {
