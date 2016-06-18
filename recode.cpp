@@ -25,8 +25,12 @@ extern "C" {
 
 // CABAC blocks smaller than this will be skipped.
 const int SURROGATE_MARKER_BYTES = 8;
-
-
+//#define DO_NEIGHBOR_LOGGING
+#ifdef DO_NEIGHBOR_LOGGING
+#define LOG_NEIGHBORS printf
+#else
+#define LOG_NEIGHBORS(...)
+#endif
 template <typename T>
 std::unique_ptr<T, std::function<void(T*&)>> av_unique_ptr(T* p, const std::function<void(T*&)>& deleter) {
   if (p == nullptr) {
@@ -619,8 +623,15 @@ class h264_model {
   FrameBuffer frames[2];
   int cur_frame = 0;
   uint8_t STATE_FOR_NUM_NONZERO_BIT[6];
+  bool do_print;
  public:
-  h264_model() { reset(); memset(bill, 0, sizeof(bill)); memset(cabac_bill, 0, sizeof(cabac_bill));}
+  h264_model() { reset(); do_print = false; memset(bill, 0, sizeof(bill)); memset(cabac_bill, 0, sizeof(cabac_bill));}
+  void enable_debug() {
+    do_print = true;
+  }
+  void disable_debug() {
+    do_print = false;
+  }
   ~h264_model() {
       bool first = true;
       for (size_t i = 0; i < sizeof(billing_names)/sizeof(billing_names[i]); ++i) {
@@ -654,12 +665,12 @@ class h264_model {
   }
   bool fetch(bool previous, bool match_type, CoefficientCoord coord, int16_t*output) const{
       if (match_type && (previous || coord.mb_x != mb_coord.mb_x || coord.mb_y != mb_coord.mb_y)) {
-          //BlockMeta meta = frames[previous ? !cur_frame : cur_frame].meta_at(coord.mb_x, coord.mb_y);
-          if (false/*!meta.coded*/) { // when we populate mb_type in the metadata, then we can use it here
+          BlockMeta meta = frames[previous ? !cur_frame : cur_frame].meta_at(coord.mb_x, coord.mb_y);
+          if (!meta.coded) { // when we populate mb_type in the metadata, then we can use it here
               return false;
           }
       }
-      frames[previous ? !cur_frame : cur_frame].at(coord.mb_x, coord.mb_y).residual[coord.scan8_index * 16 + coord.zigzag_index];
+      *output = frames[previous ? !cur_frame : cur_frame].at(coord.mb_x, coord.mb_y).residual[coord.scan8_index * 16 + coord.zigzag_index];
       return true;
   }
   model_key get_model_key(const void *context)const {
@@ -698,15 +709,20 @@ class h264_model {
               int neighbor_left = 2;
               int coeff_neighbor_above = 2;
               int coeff_neighbor_left = 2;
+              if (do_print) LOG_NEIGHBORS("[");
               {
                   CoefficientCoord neighbor_left_coord = {0, 0, 0, 0};
                   if (get_neighbor(false, sub_mb_size, mb_coord, &neighbor_left_coord)) {
                       int16_t tmp = 0;
                       if (fetch(false, true, neighbor_left_coord, &tmp)){
                           neighbor_left = !!tmp;
+                          if (do_print) LOG_NEIGHBORS("%d,", tmp);
                       } else {
                           neighbor_left = 3;
+                          if (do_print) LOG_NEIGHBORS("_,");
                       }
+                  } else {
+                      if (do_print) LOG_NEIGHBORS("x,");
                   }
               }
               {
@@ -715,10 +731,15 @@ class h264_model {
                       int16_t tmp = 0;
                       if (fetch(false, true, neighbor_above_coord, &tmp)){
                           neighbor_above = !!tmp;
+                          if (do_print) LOG_NEIGHBORS("%d,", tmp);
                       } else {
                           neighbor_above = 3;
+                          if (do_print) LOG_NEIGHBORS("_,");
                       }
+                  } else {
+                      if (do_print) LOG_NEIGHBORS("x,");
                   }
+
               }
               {
                   CoefficientCoord neighbor_left_coord = {0, 0, 0, 0};
@@ -729,6 +750,7 @@ class h264_model {
                       } else {
                           coeff_neighbor_left = 3;
                       }
+                  } else {
                   }
               }
               {
@@ -740,9 +762,19 @@ class h264_model {
                       } else {
                           coeff_neighbor_above = 3;
                       }
+                  } else {
                   }
               }
+              
               // FIXM: why doesn't this prior help at all
+              {
+                  int16_t output = 0;
+                  if (fetch(true, true, mb_coord, &output)) {
+                      if (do_print) LOG_NEIGHBORS("%d] ", output);
+                  } else {
+                      if (do_print) LOG_NEIGHBORS("x] ");
+                  }
+              }
               //const BlockMeta &meta = frames[!cur_frame].meta_at(mb_x, mb_y);
               int num_nonzeros = frames[cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y).num_nonzeros[mb_coord.scan8_index];
               (void)neighbor_above;
@@ -839,11 +871,30 @@ class h264_model {
                   serialized_so_far |= cur_bit;
               }
           } while (++i < serialized_bits);
+          LOG_NEIGHBORS("<{");
+          if (has_left) {
+              LOG_NEIGHBORS("%d,", left_nonzero);
+          } else {
+              LOG_NEIGHBORS("X,");
+          }
+          if (has_above) {
+              LOG_NEIGHBORS("%d,", above_nonzero);
+          } else {
+              LOG_NEIGHBORS("X,");
+          }
+          if (frames[!cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y).coded) {
+              LOG_NEIGHBORS("%d",frames[!cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y).num_nonzeros[mb_coord.scan8_index]);
+          } else {
+              LOG_NEIGHBORS("X");
+          }
       }
 #endif
       meta.num_nonzeros[mb_coord.scan8_index] = 0;
       for (int i= 0; i < 6; ++i) {
           meta.num_nonzeros[mb_coord.scan8_index] |= nonzero_bits[i] << i;
+      }
+      if (true) {
+          LOG_NEIGHBORS("} %d> ",meta.num_nonzeros[mb_coord.scan8_index]);
       }
       coding_type = last;
     }
@@ -987,14 +1038,28 @@ public:
   template <class T>
   void execute(T &encoder, h264_model *model,
       Recoded::Block *out, std::vector<uint8_t> &encoder_out) {
+    bool in_significance_map = (model->coding_type == PIP_SIGNIFICANCE_MAP);
+    bool block_of_interest = (model->sub_mb_cat == 1 || model->sub_mb_cat == 2);
+    bool print_priors = in_significance_map && block_of_interest;
     if (model->coding_type != PIP_SIGNIFICANCE_EOB) {
       size_t billable_bytes = encoder.put(symbol, [&](range_t range){
           return model->probability_for_state(range, state); });
       if (billable_bytes) {
         model->billable_bytes(billable_bytes);
       }
+    }else if (block_of_interest) {
+        if (symbol) {
+            LOG_NEIGHBORS("\n");
+        }
+    }
+    if (print_priors) {
+        model->enable_debug();
     }
     model->update_state(symbol, state);
+    if (print_priors) {
+        LOG_NEIGHBORS("%d ", symbol);
+        model->disable_debug();
+    }
     if (state == &model->terminate_context && symbol) {
       encoder.finish();
       out->set_cabac(&encoder_out[0], encoder_out.size());
