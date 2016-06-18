@@ -718,13 +718,19 @@ class h264_model {
                       int16_t tmp = 0;
                       if (fetch(false, true, neighbor_left_coord, &tmp)){
                           neighbor_left = !!tmp;
-                          if (do_print) LOG_NEIGHBORS("%d,", tmp);
+                          if (do_print) {
+                              LOG_NEIGHBORS("%d,", tmp);
+                          }
                       } else {
                           neighbor_left = 3;
-                          if (do_print) LOG_NEIGHBORS("_,");
+                          if (do_print) {
+                              LOG_NEIGHBORS("_,");
+                          }
                       }
                   } else {
-                      if (do_print) LOG_NEIGHBORS("x,");
+                      if (do_print) {
+                          LOG_NEIGHBORS("x,");
+                      }
                   }
               }
               {
@@ -733,13 +739,19 @@ class h264_model {
                       int16_t tmp = 0;
                       if (fetch(false, true, neighbor_above_coord, &tmp)){
                           neighbor_above = !!tmp;
-                          if (do_print) LOG_NEIGHBORS("%d,", tmp);
+                          if (do_print) {
+                              LOG_NEIGHBORS("%d,", tmp);
+                          }
                       } else {
                           neighbor_above = 3;
-                          if (do_print) LOG_NEIGHBORS("_,");
+                          if (do_print) {
+                              LOG_NEIGHBORS("_,");
+                          }
                       }
                   } else {
-                      if (do_print) LOG_NEIGHBORS("x,");
+                      if (do_print) {
+                          LOG_NEIGHBORS("x,");
+                      }
                   }
 
               }
@@ -833,6 +845,7 @@ class h264_model {
   void finished_queueing(CodingType ct, const Functor &put_or_get) {
 
     if (ct == PIP_SIGNIFICANCE_MAP) {
+      bool block_of_interest = (sub_mb_cat == 1 || sub_mb_cat == 2);
       CodingType last = coding_type;
       coding_type = PIP_SIGNIFICANCE_NZ;
       BlockMeta &meta = frames[cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y);
@@ -873,21 +886,35 @@ class h264_model {
                   serialized_so_far |= cur_bit;
               }
           } while (++i < serialized_bits);
-          LOG_NEIGHBORS("<{");
+          if (block_of_interest) {
+              LOG_NEIGHBORS("<{");
+          }
           if (has_left) {
-              LOG_NEIGHBORS("%d,", left_nonzero);
+              if (block_of_interest) {
+                  LOG_NEIGHBORS("%d,", left_nonzero);
+              }
           } else {
-              LOG_NEIGHBORS("X,");
+              if (block_of_interest) {
+                  LOG_NEIGHBORS("X,");
+              }
           }
           if (has_above) {
-              LOG_NEIGHBORS("%d,", above_nonzero);
+              if (block_of_interest) {
+                  LOG_NEIGHBORS("%d,", above_nonzero);
+              }
           } else {
-              LOG_NEIGHBORS("X,");
+              if (block_of_interest) {
+                  LOG_NEIGHBORS("X,");
+              }
           }
           if (frames[!cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y).coded) {
-              LOG_NEIGHBORS("%d",frames[!cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y).num_nonzeros[mb_coord.scan8_index]);
+              if (block_of_interest) {
+                  LOG_NEIGHBORS("%d",frames[!cur_frame].meta_at(mb_coord.mb_x, mb_coord.mb_y).num_nonzeros[mb_coord.scan8_index]);
+              }
           } else {
-              LOG_NEIGHBORS("X");
+              if (block_of_interest) {
+                  LOG_NEIGHBORS("X");
+              }
           }
       }
 #endif
@@ -895,7 +922,7 @@ class h264_model {
       for (int i= 0; i < 6; ++i) {
           meta.num_nonzeros[mb_coord.scan8_index] |= nonzero_bits[i] << i;
       }
-      if (true) {
+      if (block_of_interest) {
           LOG_NEIGHBORS("} %d> ",meta.num_nonzeros[mb_coord.scan8_index]);
       }
       coding_type = last;
