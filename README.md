@@ -47,6 +47,10 @@ make
 ./recode roundtrip data/GOPR4542.MP4
 ```
 
+Warning
+-------
+This is an experimental test bed for compression research: use on trusted inputs only
+This tool does not validate input.
 
 License
 -------

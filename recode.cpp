@@ -483,7 +483,7 @@ bool get_neighbor(bool above, int sub_mb_size,
     int mb_x = input.mb_x;
     int mb_y = input.mb_y;
     int scan8_index = input.scan8_index;
-    int zigzag_index = input.zigzag_index;
+    unsigned int zigzag_index = input.zigzag_index;
     int dimension = 2;
     if (sub_mb_size > 15) {
         dimension = 4;
@@ -493,9 +493,9 @@ bool get_neighbor(bool above, int sub_mb_size,
     }
     if (scan8_index >= 16 * 3) {
         // we are DC...
-        int linear_index = unzigzag4[zigzag_index];
+        int linear_index = unzigzag4[zigzag_index & 0x3];
         if (sub_mb_size == 16) {
-            linear_index = unzigzag16[zigzag_index];
+            linear_index = unzigzag16[zigzag_index & 0xf];
         } else {
             assert(sub_mb_size <= 4);
         }

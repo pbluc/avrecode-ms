@@ -2,9 +2,9 @@ include ffmpeg/config.mak
 
 # CXXFLAGS += -Wconversion -Wno-sign-conversion
 #-O3
-CXXFLAGS += -std=c++1y -Wall -g -I. -I./ffmpeg \
+CXXFLAGS += -fsanitize=address -std=c++1y -Wall -g -I. -I./ffmpeg \
 	   $(shell pkg-config --cflags protobuf)
-LDLIBS = -L./ffmpeg/libavdevice -lavdevice \
+LDLIBS = -fsanitize=address  -L./ffmpeg/libavdevice -lavdevice \
 	 -L./ffmpeg/libavformat -lavformat \
 	 -L./ffmpeg/libavfilter -lavfilter \
 	 -L./ffmpeg/libavcodec -lavcodec \
