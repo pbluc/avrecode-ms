@@ -1,9 +1,9 @@
 include ffmpeg/config.mak
 
-# CXXFLAGS += -Wconversion -Wno-sign-conversion
+# CXXFLAGS += -Wconversion -Wno-sign-conversion 
 #-O3
-CXXFLAGS += -fsanitize=address -std=c++1y -Wall -g -I. -I./ffmpeg \
-	   $(shell pkg-config --cflags protobuf)
+CXXFLAGS += -fsanitize=address -std=c++17 -Wall -g -I. -I./ffmpeg \
+	$(shell pkg-config --cflags protobuf)
 LDLIBS = -fsanitize=address  -L./ffmpeg/libavdevice -lavdevice \
 	 -L./ffmpeg/libavformat -lavformat \
 	 -L./ffmpeg/libavfilter -lavfilter \
@@ -15,9 +15,11 @@ LDLIBS = -fsanitize=address  -L./ffmpeg/libavdevice -lavdevice \
 	 $(shell pkg-config --libs protobuf) \
 	 -lstdc++
 
-recode: recode.o recode.pb.o ffmpeg/libavcodec/libavcodec.a
+recode: recode.o test.o recode.pb.o ffmpeg/libavcodec/libavcodec.a
 
-recode.o: recode.cpp recode.pb.h arithmetic_code.h cabac_code.h
+recode.o: recode.cpp test.h recode.pb.h arithmetic_code.h cabac_code.h
+
+test.o: test.cpp test.h
 
 recode.pb.cc recode.pb.h: recode.proto
 	protoc --cpp_out=. $<
@@ -27,4 +29,4 @@ test/arithmetic_code: test/arithmetic_code.o
 test/arithmetic_code.o: test/arithmetic_code.cpp arithmetic_code.h cabac_code.h
 
 clean:
-	rm -f recode recode.o recode.pb.{cc,h,o}
+	rm -f recode recode.o perftest.o recode.pb.{cc,h,o}

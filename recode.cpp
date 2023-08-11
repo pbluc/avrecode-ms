@@ -7,6 +7,10 @@
 #include <sstream>
 #include <typeinfo>
 #include <vector>
+#include <filesystem>
+#include <string>
+#include <chrono>
+#include <tuple>
 
 extern "C" {
 #include "libavcodec/avcodec.h"
@@ -22,6 +26,8 @@ extern "C" {
 #include "cabac_code.h"
 #include "recode.pb.h"
 #include "framebuffer.h"
+
+#include "test.h"
 
 // CABAC blocks smaller than this will be skipped.
 const int SURROGATE_MARKER_BYTES = 8;
@@ -104,15 +110,16 @@ class av_decoder {
 
   // Read enough frames to display stream diagnostics. Only used by compressor,
   // because hooks are not yet set. Reads from already in-memory blocks.
-  void dump_stream_info() {
+  void dump_stream_info(const int index = 0) {
     av_check( avformat_find_stream_info(format_ctx, nullptr),
         "Invalid input stream information" );
-    av_dump_format(format_ctx, 0, format_ctx->filename, 0);
+    av_dump_format(format_ctx, index, format_ctx->filename, 0);
   }
 
   // Decode all video frames in the file in single-threaded mode, calling the driver's hooks.
   void decode_video() {
-    auto frame = av_unique_ptr(av_frame_alloc(), av_frame_free);
+    //auto frame = av_unique_ptr(av_frame_alloc(), av_frame_free);
+    auto frame = std::unique_ptr<AVFrame, std::function<void(AVFrame*)>>(av_frame_alloc(), [](AVFrame* toDelete) {av_frame_free(&toDelete);});
     AVPacket packet;
     // TODO(ctl) add better diagnostics to error results.
     while (!av_check( av_read_frame(format_ctx, &packet), AVERROR_EOF, "Failed to read frame" )) {
@@ -163,16 +170,16 @@ class av_decoder {
     }
   };
   struct model_hooks {
-    static void frame_spec(void *opaque, int frame_num, int mb_width, int mb_height) {
+    static void frame_spec(void *opaque, int frame_num, int mb_width, int mb_height) { // Called
       auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
       self->update_frame_spec(frame_num, mb_width, mb_height);
     }
-    static void mb_xy(void *opaque, int x, int y) {
+    static void mb_xy(void *opaque, int x, int y) { // Called
       auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
       self->mb_coord.mb_x = x;
       self->mb_coord.mb_y = y;
     }
-    static void begin_sub_mb(void *opaque, int cat, int scan8index, int max_coeff, int is_dc, int chroma422) {
+    static void begin_sub_mb(void *opaque, int cat, int scan8index, int max_coeff, int is_dc, int chroma422) { // Not called
       auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
       self->sub_mb_cat = cat;
       self->mb_coord.scan8_index = scan8index;
@@ -180,7 +187,7 @@ class av_decoder {
       self->sub_mb_is_dc = is_dc;
       self->sub_mb_chroma422 = chroma422;
     }
-    static void end_sub_mb(void *opaque, int cat, int scan8index, int max_coeff, int is_dc, int chroma422) {
+    static void end_sub_mb(void *opaque, int cat, int scan8index, int max_coeff, int is_dc, int chroma422) { // Not called
       auto *self = static_cast<av_decoder*>(opaque)->driver->get_model();
       assert(self->sub_mb_cat == cat);
       assert(self->mb_coord.scan8_index == scan8index);
@@ -194,13 +201,13 @@ class av_decoder {
       self->sub_mb_chroma422 = 0;
     }
     static void begin_coding_type(void *opaque, CodingType ct,
-                                    int zigzag_index, int param0, int param1) {
+                                    int zigzag_index, int param0, int param1) { // Not called
       auto &cabac_contexts = static_cast<av_decoder*>(opaque)->cabac_contexts;
       assert(cabac_contexts.size() == 1);
       typename Driver::cabac_decoder*self = cabac_contexts.begin()->second.get();
       self->begin_coding_type(ct, zigzag_index, param0, param1);
     }
-    static void end_coding_type(void *opaque, CodingType ct) {
+    static void end_coding_type(void *opaque, CodingType ct) { // Not called 
       auto &cabac_contexts = static_cast<av_decoder*>(opaque)->cabac_contexts;
       assert(cabac_contexts.size() == 1);
       typename Driver::cabac_decoder*self = cabac_contexts.begin()->second.get();
@@ -1112,10 +1119,10 @@ class compressor {
     av_file_unmap(original_bytes, original_size);
   }
 
-  void run() {
+  void run(const int input_index = 0) {
     // Run through all the frames in the file, building the output using our hooks.
     av_decoder<compressor> d(this, input_filename);
-    d.dump_stream_info();
+    d.dump_stream_info(input_index);
     d.decode_video();
 
     // Flush the final block to the output and write to stdout.
@@ -1591,14 +1598,23 @@ class decompressor {
 };
 
 
-int roundtrip(const std::string& input_filename, std::ostream* out) {
+int roundtrip(const std::string& input_filename, std::ostream* out, int* compression_time = NULL, int* decompression_time = NULL, const int input_index = 0) {
   std::stringstream original, compressed, decompressed;
   original << std::ifstream(input_filename).rdbuf();
+  auto c1 = std::chrono::high_resolution_clock::now();
   compressor c(input_filename, compressed);
-  c.run();
+  c.run(input_index);
+  auto c2 = std::chrono::high_resolution_clock::now();
+  auto d1 = std::chrono::high_resolution_clock::now();
   decompressor d(input_filename, compressed.str(), decompressed);
   d.run();
+  auto d2 = std::chrono::high_resolution_clock::now();
 
+  if (compression_time != NULL && decompression_time != NULL) {
+    *compression_time = std::chrono::duration_cast<std::chrono::milliseconds>(c2 - c1).count();
+    *decompression_time = std::chrono::duration_cast<std::chrono::milliseconds>(d2 - d1).count();
+  }
+  
   if (original.str() == decompressed.str()) {
     if (out) {
       (*out) << compressed.str();
@@ -1613,16 +1629,15 @@ int roundtrip(const std::string& input_filename, std::ostream* out) {
     }
     double proto_overhead = (compressed.str().size() - proto_block_bytes) * 1.0 / compressed.str().size();
 
-    std::cout << "Compress-decompress roundtrip succeeded:" << std::endl;
-    std::cout << " compression ratio: " << ratio*100. << "%" << std::endl;
-    std::cout << " protobuf overhead: " << proto_overhead*100. << "%" << std::endl;
+    std::cerr << "Compress-decompress roundtrip succeeded:" << std::endl;
+    std::cerr << " compression ratio: " << ratio*100. << "%" << std::endl;
+    std::cerr << " protobuf overhead: " << proto_overhead*100. << "%" << std::endl;
     return 0;
   } else {
     std::cerr << "Compress-decompress roundtrip failed." << std::endl;
     return 1;
   }
 }
-
 
 int
 main(int argc, char **argv) {
@@ -1648,6 +1663,9 @@ main(int argc, char **argv) {
       d.run();
     } else if (command == "roundtrip") {
       return roundtrip(input_filename, out_file.is_open() ? &out_file : nullptr);
+    } else if (command == "test") {
+      perf_test_driver(input_filename, roundtrip);
+      return 0;
     } else {
       throw std::invalid_argument("Unknown command: " + command);
     }
