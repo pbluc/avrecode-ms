@@ -1,31 +1,6 @@
-avrecode: lossless re-compression of compressed video streams
-=============================================================
+# avrecode: lossless re-compression of compressed video streams
 
-avrecode reads an already-compressed video file and writes a more compressed
-file. Unlike transcoding, which loses fidelity, the compression algorithm used
-by avrecode is reversible. The decompressed bytes exactly match the original
-input file. However, avrecode's compressed format can only be read by avrecode
--- an avrecode-compressed file cannot be played directly by standard software.
-
-avrecode works by decoding the video stream into symbols using ffmpeg's
-libavcodec. It tries to predict each symbol as it arrives, and re-encodes the
-symbols to the compressed file using arithmetic coding. When avrecode's
-predictions are higher quality than the predictions specified by the H.264
-standard, it achieves a better compression ratio.
-
-
-Installing
-----------
-
-avrecode consists of a compression/decompression program and a fork of the
-libavcodec library, part of the ffmpeg project. These live in separate github
-repositories:
-
-- https://github.com/dropbox/avrecode
-- https://github.com/dropbox/libavcodec-hooks
-
-The avrecode repository imports the libavcodec-hooks repository as a submodule,
-so the `git submodule` command is used to keep them in sync.
+## Linux Installation
 
 Download the source:
 
@@ -38,7 +13,8 @@ git submodule update --init
 Build and test:
 
 ```
-brew install protobuf
+sudo apt-get update
+sudo apt-get install protobuf-compiler build-essential yasm pkg-config
 cd ffmpeg
 ./configure
 make
