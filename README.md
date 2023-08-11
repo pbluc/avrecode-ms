@@ -1,44 +1,20 @@
-avrecode: lossless re-compression of compressed video streams
-=============================================================
+# avrecode: lossless re-compression of compressed video streams
 
-avrecode reads an already-compressed video file and writes a more compressed
-file. Unlike transcoding, which loses fidelity, the compression algorithm used
-by avrecode is reversible. The decompressed bytes exactly match the original
-input file. However, avrecode's compressed format can only be read by avrecode
--- an avrecode-compressed file cannot be played directly by standard software.
-
-avrecode works by decoding the video stream into symbols using ffmpeg's
-libavcodec. It tries to predict each symbol as it arrives, and re-encodes the
-symbols to the compressed file using arithmetic coding. When avrecode's
-predictions are higher quality than the predictions specified by the H.264
-standard, it achieves a better compression ratio.
-
-
-Installing
-----------
-
-avrecode consists of a compression/decompression program and a fork of the
-libavcodec library, part of the ffmpeg project. These live in separate github
-repositories:
-
-- https://github.com/dropbox/avrecode
-- https://github.com/dropbox/libavcodec-hooks
-
-The avrecode repository imports the libavcodec-hooks repository as a submodule,
-so the `git submodule` command is used to keep them in sync.
+## Linux Installation
 
 Download the source:
 
 ```
-git clone https://github.com/dropbox/avrecode
-cd avrecode
+git clone https://github.com/pbluc/avrecode-ms.git
+cd avrecode-ms
 git submodule update --init
 ```
 
 Build and test:
 
 ```
-brew install protobuf
+sudo apt-get update
+sudo apt-get install protobuf-compiler build-essential yasm pkg-config
 cd ffmpeg
 ./configure
 make
@@ -47,20 +23,31 @@ make
 ./recode roundtrip data/GOPR4542.MP4
 ```
 
-Warning
--------
+## Using the Tester
+Runs compress-decompress roundtrip process on a valid test directory of only video format files. 
+
+```
+./recode test ./recordings
+```
+
+Creates a subfolder called `output` which contains the following:
+1. the decompressed video files
+2. `log.txt`, a text file containing the command line output
+3. and `metrics.csv`, a CSV file containing metrics collected during runtime to measure performance
+
+
+## Warning
+
 This is an experimental test bed for compression research: use on trusted inputs only
 This tool does not validate input.
 
-License
--------
+## License
 
 avrecode is released under the BSD 3-clause license. See the LICENSE file for details.
 The required libavcodec-hooks patch to ffmpeg is licenced under the LGPL.
 
 
-Contributing
-------------
+## Contributing
 
 avrecode was originally written by Chris Lesniewski during Dropbox Hack Week
 January 2016. It is a redesign of the first version written by Daniel Horn,
