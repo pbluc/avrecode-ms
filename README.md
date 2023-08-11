@@ -5,8 +5,8 @@
 Download the source:
 
 ```
-git clone https://github.com/dropbox/avrecode
-cd avrecode
+git clone https://github.com/pbluc/avrecode-ms.git
+cd avrecode-ms
 git submodule update --init
 ```
 
@@ -22,6 +22,19 @@ cd ..
 make
 ./recode roundtrip data/GOPR4542.MP4
 ```
+
+## Using the Tester
+Runs compress-decompress roundtrip process on a valid test directory of only video format files. 
+
+```
+./recode test ./recordings
+```
+
+Creates a subfolder called `output` which contains the following:
+1. the decompressed video files
+2. `log.txt`, a text file containing the command line output
+3. and `metrics.csv`, a CSV file containing metrics collected during runtime to measure performance
+
 
 ## Warning
 
